@@ -18,6 +18,9 @@ Quick reference for finding specific information in the change logs.
 ### Bug Fixes
 - **VENV_ACTIVATION_FIX.md** - Virtual environment activation fix
 
+### Git Repository
+- **PUSH_TO_REMOTE.md** - Push to remote and submodule setup
+
 ### Overall
 - **FINAL_SUMMARY.md** - Complete project summary
 
@@ -40,6 +43,7 @@ All changes: **January 18, 2026**
 | Integration guide | INTEGRATION_COMPLETE.md |
 | Configs setup | CONFIGS_REPO_COMPLETE.md |
 | Venv fix | VENV_ACTIVATION_FIX.md |
+| Git/Remote setup | PUSH_TO_REMOTE.md |
 | Everything | FINAL_SUMMARY.md |
 
 ## File Sizes

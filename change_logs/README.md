@@ -47,9 +47,17 @@ This directory contains detailed change logs, implementation summaries, and tech
    - Moved from Python to Bash scripts
    - Proper dependency loading
 
+### Git Repository Setup
+
+8. **[PUSH_TO_REMOTE.md](PUSH_TO_REMOTE.md)**
+   - Setting up remote repository
+   - Pushing workspace to GitHub/GitLab
+   - Submodule setup instructions
+   - SSH configuration
+
 ### Overall Summary
 
-8. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)**
+9. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)**
    - Complete project summary
    - All phases and accomplishments
    - File inventory and testing checklist
