@@ -9,8 +9,8 @@ map_manager:
     map_format: 'pgm'         # 'pgm' or 'png'
     
     # Auto-save settings
-    enable_auto_save: false
-    auto_save_interval: 300.0  # seconds (5 minutes)
+    enable_auto_save: true
+    auto_save_interval: 60.0  # seconds (10 minutes) - MVP: continuous updates
     
     # Map sources
     subscribe_to_rtabmap: true

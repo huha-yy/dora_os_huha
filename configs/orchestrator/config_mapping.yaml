@@ -6,9 +6,9 @@ orchestrator_port: 8000
 
 services:
   # Core services
-  ai_agent: true
+  ai_agent: false       # Disable - not needed for mapping
   realsense_camera: true
-  perception: true
+  perception: false     # Disable - has a bug causing crashes
   
   # Navigation services
   map_generator: true   # Enable custom map generation
