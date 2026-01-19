@@ -47,9 +47,14 @@ This directory contains detailed change logs, implementation summaries, and tech
    - Moved from Python to Bash scripts
    - Proper dependency loading
 
+8. **[CONFIG_LISTING_FIX.md](CONFIG_LISTING_FIX.md)**
+   - Fixed `--list-configs` not showing files
+   - Path resolution with `.resolve()`
+   - Updated usage instructions
+
 ### Git Repository Setup
 
-8. **[PUSH_TO_REMOTE.md](PUSH_TO_REMOTE.md)**
+9. **[PUSH_TO_REMOTE.md](PUSH_TO_REMOTE.md)**
    - Setting up remote repository
    - Pushing workspace to GitHub/GitLab
    - Submodule setup instructions
@@ -57,10 +62,10 @@ This directory contains detailed change logs, implementation summaries, and tech
 
 ### Overall Summary
 
-9. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)**
-   - Complete project summary
-   - All phases and accomplishments
-   - File inventory and testing checklist
+10. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)**
+    - Complete project summary
+    - All phases and accomplishments
+    - File inventory and testing checklist
 
 ## Timeline
 
