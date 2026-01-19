@@ -1,0 +1,30 @@
+# Example: Development Environment Configuration
+# This shows how to configure the orchestrator for development work
+
+language: "en"  # Use English for development
+orchestrator_port: 8000
+
+services:
+  # Core services
+  ai_agent: false          # Disabled for faster startup
+  realsense_camera: false  # Use test video instead
+  perception: true
+  
+  # Navigation services
+  map_generator: true
+  map_manager: true
+  rtabmap_slam: false      # Disabled for faster startup
+  nav2_navigation: false
+
+perception:
+  debug_video_path: "/path/to/test/video.mp4"  # Use recorded video
+  print_fps: true  # Show FPS for performance monitoring
+
+camera:
+  align_depth: true
+  
+mapping:
+  config_file: "configs/nav/map_generator.yaml"
+  
+map_manager:
+  config_file: "configs/nav/map_manager.yaml"

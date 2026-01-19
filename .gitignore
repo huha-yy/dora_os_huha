@@ -1,0 +1,61 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.old
+
+# Cache
+cache/
+.cache/
+
+# Generated files
+*.pyc
+*.pyo
+*.pdf
+*.gv
+
+# Local configuration overrides
+*.local.yaml
+.env
+.env.*
+
+# Maps (optional - uncomment if you don't want to commit maps)
+# maps/*.pgm
+# maps/*.yaml
+# maps/*.png
+

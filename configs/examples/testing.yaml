@@ -1,0 +1,30 @@
+# Example: Testing Configuration
+# Minimal configuration for running tests
+
+language: "en"
+orchestrator_port: 8001  # Different port to avoid conflicts
+
+services:
+  # Minimal services for testing
+  ai_agent: false
+  realsense_camera: false
+  perception: false
+  
+  # Test only navigation
+  map_generator: true
+  map_manager: true
+  rtabmap_slam: false
+  nav2_navigation: false
+
+perception:
+  debug_video_path: "/path/to/test/fixtures/test_video.mp4"
+  print_fps: true
+
+camera:
+  align_depth: true
+  
+mapping:
+  config_file: "configs/nav/map_generator.yaml"
+  
+map_manager:
+  config_file: "configs/nav/map_manager.yaml"

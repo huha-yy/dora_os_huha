@@ -1,0 +1,10 @@
+[project]
+name = "dorabot"
+version = "0.1.0"
+
+[project.optional-dependencies]
+dev = [
+  "-e ./src/perception",
+  "-e ./src/ai_agent",
+  "-e ./src/orchestrator",
+]

@@ -1,0 +1,37 @@
+# Example: Production Environment Configuration
+# This shows a production-ready configuration
+
+language: "zh"
+orchestrator_port: 8000
+
+services:
+  # All core services enabled
+  ai_agent: true
+  realsense_camera: true
+  perception: true
+  
+  # Navigation - use saved maps, no SLAM
+  map_generator: false     # Don't generate maps in production
+  map_manager: true        # Load pre-mapped environments
+  rtabmap_slam: false      # SLAM disabled (use pre-built maps)
+  nav2_navigation: true    # Full navigation enabled
+
+perception:
+  debug_video_path: null   # Use real camera
+  print_fps: false         # No debug output in production
+
+camera:
+  align_depth: true
+  
+mapping:
+  config_file: "configs/nav/map_generator.yaml"
+  
+map_manager:
+  config_file: "configs/nav/map_manager.yaml"
+
+rtabmap:
+  rgb_topic: "/camera/camera/color/image_raw"
+  depth_topic: "/camera/camera/aligned_depth_to_color/image_raw"
+  camera_info_topic: "/camera/camera/color/camera_info"
+  approx_sync: true
+  frame_id: "camera_link"

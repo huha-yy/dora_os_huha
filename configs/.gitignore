@@ -1,0 +1,29 @@
+# Sensitive configurations
+**/secrets.yaml
+**/credentials.yaml
+**/*.secret.yaml
+**/*_secret.yaml
+
+# Local overrides (for personal development)
+*.local.yaml
+.env
+.env.*
+
+# Environment-specific sensitive configs
+environments/*/secrets/
+
+# Temporary files
+*.tmp
+*.bak
+*~
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Backup files
+*.backup
+*.old

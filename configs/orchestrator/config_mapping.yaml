@@ -1,0 +1,30 @@
+# Orchestrator Configuration - With Mapping
+# Enables custom map generation and management
+
+language: "zh"
+orchestrator_port: 8000
+
+services:
+  # Core services
+  ai_agent: true
+  realsense_camera: true
+  perception: true
+  
+  # Navigation services
+  map_generator: true   # Enable custom map generation
+  map_manager: true     # Enable map persistence
+  rtabmap_slam: false
+  nav2_navigation: false
+
+perception:
+  debug_video_path: null
+  print_fps: false
+
+camera:
+  align_depth: true
+  
+mapping:
+  config_file: "configs/nav/map_generator.yaml"
+  
+map_manager:
+  config_file: "configs/nav/map_manager.yaml"
