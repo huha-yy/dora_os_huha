@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Demo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Chatbot Demo</h1>
+            <div class="connection-status" id="connection-status">
+                <span class="status-dot"></span>
+                <span class="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- Chat Messages -->
+            <div class="chat-container" id="chat-container">
+                <div class="messages" id="messages">
+                    <!-- Messages will be inserted here -->
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-row">
+                    <input 
+                        type="text" 
+                        id="text-input" 
+                        placeholder="Type a message..." 
+                        autocomplete="off"
+                    >
+                    <button id="send-btn" class="btn btn-primary">Send</button>
+                </div>
+                <div class="input-row">
+                    <button id="mic-btn" class="btn btn-secondary">
+                        <span class="mic-icon">🎤</span>
+                        <span class="mic-text">Connecting...</span>
+                    </button>
+                    <button id="interrupt-btn" class="btn btn-danger">Interrupt</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Audio Player (hidden) -->
+        <audio id="audio-player" style="display: none;"></audio>
+
+        <!-- Debug Panel (collapsible) -->
+        <details class="debug-panel">
+            <summary>Debug Log</summary>
+            <div class="debug-log" id="debug-log"></div>
+            <button id="clear-debug" class="btn btn-small">Clear Log</button>
+        </details>
+    </div>
+
+    <script src="app.js?v=3"></script>
+</body>
+</html>

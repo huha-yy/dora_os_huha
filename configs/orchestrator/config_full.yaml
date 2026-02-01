@@ -14,7 +14,7 @@ services:
   map_generator: true
   map_manager: true
   rtabmap_slam: true
-  nav2_navigation: true  # Full Nav2 stack
+  nav2_navigation: false  # Full Nav2 stack
 
 perception:
   debug_video_path: null

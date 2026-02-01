@@ -1,0 +1,34 @@
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "asr_engine": {
+        "asr_model": "sherpa_onnx_asr",
+        "sherpa_onnx_asr": {
+            "model_type": "sense_voice",
+            "sense_voice": "./models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/model.int8.onnx",
+            "tokens": "./models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tokens.txt",
+            "num_threads": 4,
+            "sample_rate": 16000,
+            "feature_dim": 80,
+            "decoding_method": "greedy_search"
+        }
+    },
+    "tts_engine": {
+        "tts_model": "edge_tts",
+        "edge_tts": {
+            "voice": "zh-CN-XiaoxiaoNeural"
+        }
+    },
+    "vad_engine": {
+        "vad_model": "silero_vad",
+        "silero_vad": {
+            "orig_sr": 16000,
+            "target_sr": 16000,
+            "prob_threshold": 0.4,
+            "db_threshold": 60,
+            "required_hits": 3,
+            "required_misses": 24,
+            "smoothing_window": 5
+        }
+    }
+}
