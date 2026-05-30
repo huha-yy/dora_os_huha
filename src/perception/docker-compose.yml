@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  body_tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: body_tracking
+    restart: unless-stopped
+    
+
+    ports:
+      - "8081:8081"      # Web service
+      - "12345:12345/udp" # IMU UDP
+    
+
+    environment:
+      # - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      # - BLIND_PATH_MODEL=${BLIND_PATH_MODEL:-model/yolo-seg.pt}
+      # - OBSTACLE_MODEL=${OBSTACLE_MODEL:-model/yoloe-11l-seg.pt}
+      # - YOLOE_MODEL_PATH=${YOLOE_MODEL_PATH:-model/yoloe-11l-seg.pt}
+      # - ENABLE_TTS=${ENABLE_TTS:-true}
+      # - TTS_INTERVAL_SEC=${TTS_INTERVAL_SEC:-1.0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    volumes:
+      - D:\Code\models:/models:ro
+      - .:/app              
+    
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+
+    # depends_on:
+    #   - redis
+    
+
+    network_mode: bridge
+    
+
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
+
+

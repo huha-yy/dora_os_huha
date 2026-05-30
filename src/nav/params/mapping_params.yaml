@@ -1,0 +1,58 @@
+# Mapping Parameters
+# Global parameters for the mapping system
+
+# Point Cloud Processing
+point_cloud_processing:
+  voxel_size: 0.05                # meters (downsample voxel size)
+  depth_min_range: 0.3            # meters
+  depth_max_range: 5.0            # meters
+  min_height: -2.0                # meters (filter floor/ceiling)
+  max_height: 2.0                 # meters
+  outlier_removal:
+    enabled: true
+    k_neighbors: 20
+    std_ratio: 2.0
+
+# Occupancy Grid Mapping
+occupancy_grid:
+  resolution: 0.05                # meters per cell
+  width: 10.0                     # meters
+  height: 10.0                    # meters
+  origin_x: -5.0                  # meters (grid origin)
+  origin_y: 0.0                   # meters
+  
+  # Probability settings
+  prob_occupied: 0.7
+  prob_free: 0.3
+  
+  # Ray tracing for free space
+  mark_free_space: true
+  ray_trace_sample_rate: 10       # Sample every Nth point for ray tracing
+  
+  # Post-processing
+  morphology:
+    enabled: true
+    kernel_size: 3
+    operation: 'closing'          # 'closing', 'opening', 'dilation', 'erosion'
+  
+  obstacle_inflation:
+    enabled: false
+    radius: 0.3                   # meters (robot radius + safety margin)
+
+# Camera Configuration
+camera:
+  frame_id: 'camera_link'
+  base_frame_id: 'base_link'
+  
+  # RealSense D435i default intrinsics (will be overridden by camera_info topic)
+  fx: 614.0
+  fy: 614.0
+  cx: 320.0
+  cy: 240.0
+  width: 640
+  height: 480
+
+# Performance
+performance:
+  max_points_per_update: 50000    # Limit points processed per update
+  processing_threads: 2

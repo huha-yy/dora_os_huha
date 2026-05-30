@@ -1,0 +1,117 @@
+# orchestrator/ros_node.py
+import json
+import os
+import sys
+
+# Add src to path to enable absolute imports when running as script
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import time
+from typing import Optional
+
+import logging
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+
+# Configure logging format to include line numbers for ROS2 loggers
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(filename)s:%(lineno)d: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,  # Override any existing configuration
+)
+
+from orchestrator.schemas import FallEvent
+from orchestrator.domain import safety
+from orchestrator.domain.state import RobotState, AgentStatus
+from orchestrator.config import AI_AGENT_URL, register_executors
+from orchestrator.execution.action_registry import ActionExecutorRegistry
+from orchestrator.execution.scheduler import AsyncScheduler
+import threading
+from typing import Tuple
+
+
+class DorabotOrchestratorNode(Node):
+    """
+    Central ROS2 node for Dorabot:
+    - Subscribes to fall detection events.
+    - (Later: subscribes to SLAM, follow, wheel status, etc.)
+    """
+
+    def __init__(self, fall_topic_name: str = "fall_event") -> None:
+        super().__init__("dorabot_orchestrator")
+        self.logger = self.get_logger()
+        self.logger.info(
+            f"Starting DorabotOrchestratorNode, listening on '{fall_topic_name}'"
+        )
+
+        self._fall_sub = self.create_subscription(
+            String,
+            fall_topic_name,
+            self._fall_callback,
+            10,
+        )
+        self.robot_state = RobotState()
+        self.scheduler = AsyncScheduler()
+        self.scheduler.start()
+        self.action_registry = ActionExecutorRegistry(self.scheduler)
+        register_executors(self.action_registry, self)
+        self.ai_agent_url = AI_AGENT_URL
+
+    def _fall_callback(self, msg: String) -> None:
+        """
+        Expects messages like "fallen:{timestamp}" (string).
+        If timestamp is missing or malformed, we just use now().
+        """
+        text = msg.data or "{}"
+        self.logger.debug(f"Received fall_msg: {text!r}")
+        try:
+            json_data = json.loads(text)
+            event = json_data.get("status", "")
+            confidence = json_data.get("confidence", 1.0)
+            ts = json_data.get("timestamp", 0.0)
+        except ValueError as e:
+            self.logger.warn(f"Failed to parse fall_msg {text!r}: {e}")
+            return
+        # Delegate to domain safety logic
+        decision = safety.handle_fall_event(
+            event=FallEvent(event=event, confidence=confidence, ts=ts),
+            robot_state=self.robot_state,
+        )
+        decision_result = self.action_registry.execute(decision)
+
+
+def start_ros_node() -> Tuple[DorabotOrchestratorNode, threading.Thread]:
+    rclpy.init(args=None)
+    node = DorabotOrchestratorNode()
+    t = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    t.start()
+    return node, t
+
+
+def stop_ros_node(node: DorabotOrchestratorNode | None) -> None:
+    if node is None:
+        return
+    try:
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def main() -> None:
+    rclpy.init(args=None)
+    node = DorabotOrchestratorNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        node.logger.error(f"Error in main: {e}")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
