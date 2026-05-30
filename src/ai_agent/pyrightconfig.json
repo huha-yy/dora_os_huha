@@ -1,0 +1,51 @@
+{
+  "include": [
+    "src",
+    "run_server.py",
+    "upgrade.py",
+    "upgrade_codes",
+    "scripts"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.git",
+    "frontend",
+    "models",
+    "cache",
+    "logs",
+    "chat_history",
+    ".venv",
+    "venv"
+  ],
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "stubPath": "",
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.10",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": true,
+  "reportUnusedClass": true,
+  "reportUnusedFunction": true,
+  "reportUnusedVariable": true,
+  "reportDuplicateImport": true,
+  "reportWildcardImportFromLibrary": false,
+  "reportOptionalSubscript": false,
+  "reportOptionalMemberAccess": false,
+  "reportOptionalCall": false,
+  "reportOptionalIterable": false,
+  "reportOptionalContextManager": false,
+  "reportOptionalOperand": false,
+  "reportGeneralTypeIssues": false,
+  "reportPrivateImportUsage": false,
+  "reportConstantRedefinition": false,
+  "reportIncompatibleMethodOverride": false,
+  "reportIncompatibleVariableOverride": false,
+  "reportOverlappingOverload": false
+}
+

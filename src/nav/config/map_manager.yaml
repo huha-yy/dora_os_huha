@@ -1,0 +1,17 @@
+# Map Manager Configuration
+# Parameters for map persistence and management
+
+map_manager:
+  ros__parameters:
+    # Map storage
+    map_directory: '~/dorabot_ws/maps'
+    default_map_name: 'home'
+    map_format: 'pgm'         # 'pgm' or 'png'
+    
+    # Auto-save settings
+    enable_auto_save: false
+    auto_save_interval: 300.0  # seconds (5 minutes)
+    
+    # Map sources
+    subscribe_to_rtabmap: true
+    subscribe_to_map_generator: true
