@@ -1,13 +1,17 @@
+from collections import deque
 from enum import Enum
 import json
 import os
-from typing import Callable, Dict, List, Optional, TypedDict
+from typing import Callable, Deque, Dict, List, Optional, TypedDict
 
 from fastapi import WebSocket, WebSocketDisconnect
 from service_context import ServiceContext
 from loguru import logger
 import numpy as np
 from response_awaiter import response_awaiter
+
+
+FALLBACK_REPLY = "抱歉,我现在没法回答你的问题,请稍后再试。"
 
 
 class WSMessage(TypedDict, total=False):
@@ -30,7 +34,42 @@ class WebSocketHandler:
         self.client_connections: Dict[str, WebSocket] = {}
         self.client_contexts: Dict[str, ServiceContext] = {}
         self.received_data_buffers: Dict[str, np.ndarray] = {}
+        self.client_histories: Dict[str, Deque[dict]] = {}
         self.message_handlers: Dict[str, Callable] = self._init_message_handlers()
+
+    def _history_for(self, client_uid: str, context: ServiceContext) -> Deque[dict]:
+        """Return (creating if needed) the conversation history for a client.
+
+        Capped at `max_history_turns` user/assistant turns (so 2x messages).
+        """
+        hist = self.client_histories.get(client_uid)
+        if hist is None:
+            max_msgs = max(2, 2 * getattr(context, "max_history_turns", 8))
+            hist = deque(maxlen=max_msgs)
+            self.client_histories[client_uid] = hist
+        return hist
+
+    async def _generate_reply(
+        self, context: ServiceContext, client_uid: str, user_text: str
+    ) -> str:
+        """Run the LLM (with system prompt + per-client history) and return text."""
+        history = self._history_for(client_uid, context)
+        if context.llm_engine is None:
+            logger.warning("LLM engine not configured; returning fallback reply")
+            return FALLBACK_REPLY
+
+        messages = context.llm_engine.build_messages(
+            user_text=user_text,
+            history=list(history),
+            system_prompt=context.system_prompt or None,
+        )
+        reply = await context.llm_engine.async_chat(messages)
+        if not reply:
+            return FALLBACK_REPLY
+
+        history.append({"role": "user", "content": user_text})
+        history.append({"role": "assistant", "content": reply})
+        return reply
 
     def _init_message_handlers(self) -> Dict[str, Callable]:
         """Initialize message type to handler mapping"""
@@ -128,16 +167,10 @@ class WebSocketHandler:
 
     async def handle_disconnect(self, client_uid: str) -> None:
         """Handle WebSocket disconnection"""
-
-        # Clean up other client data
         self.client_connections.pop(client_uid, None)
         self.client_contexts.pop(client_uid, None)
         self.received_data_buffers.pop(client_uid, None)
-
-        # Call context close to clean up resources (e.g., MCPClient)
-        context = self.client_contexts.get(client_uid)
-        if context:
-            await context.close()
+        self.client_histories.pop(client_uid, None)
 
         logger.info(f"Client {client_uid} disconnected")
         response_awaiter.cleanup_client(client_uid)
@@ -147,6 +180,7 @@ class WebSocketHandler:
         self.client_connections.pop(client_uid, None)
         self.client_contexts.pop(client_uid, None)
         self.received_data_buffers.pop(client_uid, None)
+        self.client_histories.pop(client_uid, None)
         response_awaiter.cleanup_client(client_uid)
 
     async def _route_message(
@@ -282,33 +316,31 @@ class WebSocketHandler:
                 logger.info(f"Transcribed: {text}")
                 
                 if text and text.strip():
-                    # Send user's transcribed text
+                    user_text = text.strip()
                     await websocket.send_json({
-                        "type": "user-transcription", 
-                        "text": text.strip()
+                        "type": "user-transcription",
+                        "text": user_text,
                     })
-                    
-                    # Generate robot response
-                    robot_response = "I am the demo robot. What can I do for you?"
-                    
-                    # Generate TTS audio if available
+
+                    robot_response = await self._generate_reply(
+                        context, client_uid, user_text
+                    )
+
                     audio_url = None
                     if context.tts_engine:
                         try:
                             audio_path = context.tts_engine.generate_audio(robot_response)
                             logger.info(f"Generated TTS audio: {audio_path}")
-                            # Convert absolute path to web-accessible URL
                             if audio_path:
                                 audio_filename = os.path.basename(audio_path)
                                 audio_url = f"/cache/{audio_filename}"
                         except Exception as e:
                             logger.error(f"TTS error: {e}")
-                    
-                    # Send robot response with optional audio
+
                     await websocket.send_json({
                         "type": "robot-response",
                         "text": robot_response,
-                        "audio": audio_url
+                        "audio": audio_url,
                     })
                     
             except Exception as e:
@@ -329,16 +361,28 @@ class WebSocketHandler:
         context = self.client_contexts.get(client_uid)
         
         if msg_type == "text-input":
-            # Handle text input
-            text = data.get("text", "")
-            if text:
-                logger.info(f"Received text from {client_uid}: {text}")
-                # Echo back the text for now (replace with LLM later)
-                response = f"You said: {text}"
-                await websocket.send_json({
-                    "type": "text-response",
-                    "text": response
-                })
+            text = (data.get("text") or "").strip()
+            if not text:
+                return
+            logger.info(f"Received text from {client_uid}: {text}")
+
+            response = await self._generate_reply(context, client_uid, text)
+
+            audio_url = None
+            if context and context.tts_engine:
+                try:
+                    audio_path = context.tts_engine.generate_audio(response)
+                    if audio_path:
+                        audio_filename = os.path.basename(audio_path)
+                        audio_url = f"/cache/{audio_filename}"
+                except Exception as e:
+                    logger.error(f"TTS error: {e}")
+
+            await websocket.send_json({
+                "type": "robot-response",
+                "text": response,
+                "audio": audio_url,
+            })
                 
         elif msg_type == "mic-audio-end":
             # Handle end of audio recording
@@ -353,52 +397,54 @@ class WebSocketHandler:
             
             if audio_buffer is not None and len(audio_buffer) > 0:
                 logger.info(f"Received audio from {client_uid}, length: {len(audio_buffer)}")
-                
-                # Try to transcribe if ASR engine is available
+
                 if context and context.asr_engine:
                     try:
                         text = await context.asr_engine.async_transcribe_np(audio_buffer)
                         logger.info(f"Transcribed: {text}")
-                        
-                        # Send user's transcribed text
+
                         await websocket.send_json({
-                            "type": "user-transcription", 
-                            "text": text
+                            "type": "user-transcription",
+                            "text": text,
                         })
-                        
-                        # Generate robot response
-                        robot_response = "I am the demo robot. What can I do for you?"
-                        
-                        # Generate TTS audio if available
-                        audio_path = None
+
+                        user_text = (text or "").strip()
+                        if user_text:
+                            robot_response = await self._generate_reply(
+                                context, client_uid, user_text
+                            )
+                        else:
+                            robot_response = FALLBACK_REPLY
+
+                        audio_url = None
                         if context and context.tts_engine:
                             try:
                                 audio_path = context.tts_engine.generate_audio(robot_response)
                                 logger.info(f"Generated TTS audio: {audio_path}")
+                                if audio_path:
+                                    audio_filename = os.path.basename(audio_path)
+                                    audio_url = f"/cache/{audio_filename}"
                             except Exception as e:
                                 logger.error(f"TTS error: {e}")
-                        
-                        # Send robot response with optional audio
+
                         await websocket.send_json({
                             "type": "robot-response",
                             "text": robot_response,
-                            "audio": audio_path
+                            "audio": audio_url,
                         })
-                        
+
                     except Exception as e:
                         logger.error(f"ASR error: {e}")
                         await websocket.send_json({
                             "type": "error",
-                            "message": f"ASR error: {str(e)}"
+                            "message": f"ASR error: {str(e)}",
                         })
                 else:
-                    # No ASR configured - just acknowledge
                     await websocket.send_json({
                         "type": "error",
-                        "message": "ASR not configured."
+                        "message": "ASR not configured.",
                     })
-                
-                # Clear the buffer
+
                 self.received_data_buffers[client_uid] = np.array([])
             else:
                 await websocket.send_json({

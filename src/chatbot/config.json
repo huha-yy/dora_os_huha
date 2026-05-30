@@ -30,5 +30,19 @@
             "required_misses": 24,
             "smoothing_window": 5
         }
+    },
+    "llm_engine": {
+        "llm_model": "minimax",
+        "system_prompt": "你是 Dorabot,一个友好、乐于助人的家庭服务机器人助手。请用简洁、自然的口语化中文回答用户的问题,回复尽量控制在两到三句话以内,适合语音播报。如果用户用英文提问,请用英文简洁回答。",
+        "max_history_turns": 8,
+        "minimax": {
+            "api_key": null,
+            "base_url": "https://api.minimaxi.com/v1",
+            "model": "MiniMax-M2.7",
+            "temperature": 0.7,
+            "max_tokens": 512,
+            "timeout": 30.0,
+            "reasoning_split": true
+        }
     }
 }
