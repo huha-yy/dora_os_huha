@@ -18,6 +18,7 @@
 set -euo pipefail
 
 URL="http://localhost:8080/"
+PROFILE_DIR="${HOME}/.cache/chromium-dorabot-local"
 
 if [[ "${1:-}" == "--stop" || "${1:-}" == "stop" ]]; then
     if pgrep -f "chromium.*localhost:8080" >/dev/null; then
@@ -67,9 +68,13 @@ if ! curl -sf -o /dev/null "$URL"; then
 fi
 
 echo "Opening Dorabot UI (close the browser window or Ctrl+C to exit)..."
+mkdir -p "$PROFILE_DIR"
 exec chromium-browser \
     "$URL" \
     --new-window \
     --start-maximized \
+    --user-data-dir="$PROFILE_DIR" \
     --autoplay-policy=no-user-gesture-required \
-    --use-fake-ui-for-media-stream
+    --disable-infobars \
+    --no-first-run \
+    --no-default-browser-check

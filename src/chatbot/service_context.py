@@ -14,6 +14,27 @@ from llm.llm_factory import LLMFactory
 
 from loguru import logger
 
+_CHATBOT_ROOT = Path(__file__).parent
+
+
+def _load_system_prompt(llm_config: Dict[str, Any]) -> str:
+    """Build the full system prompt from persona text and optional knowledge file."""
+    prompt = llm_config.get("system_prompt", "")
+    knowledge_file = llm_config.get("knowledge_file")
+    if not knowledge_file:
+        return prompt
+
+    path = (_CHATBOT_ROOT / knowledge_file).resolve()
+    if not path.is_file():
+        logger.warning(f"Knowledge file not found: {path}")
+        return prompt
+
+    knowledge = path.read_text(encoding="utf-8").strip()
+    if not knowledge:
+        return prompt
+
+    return f"{prompt}\n\n{knowledge}"
+
 
 class ServiceContext:
     """Service context for the chatbot"""
@@ -51,7 +72,7 @@ class ServiceContext:
             self.vad_engine = self.init_vad(config["vad_engine"])
         if config.get("llm_engine"):
             self.llm_engine = self.init_llm(config["llm_engine"])
-            self.system_prompt = config["llm_engine"].get("system_prompt", "")
+            self.system_prompt = _load_system_prompt(config["llm_engine"])
             self.max_history_turns = int(
                 config["llm_engine"].get("max_history_turns", 8)
             )

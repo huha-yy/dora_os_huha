@@ -33,7 +33,8 @@
     },
     "llm_engine": {
         "llm_model": "minimax",
-        "system_prompt": "你是 Dorabot,一个友好、乐于助人的家庭服务机器人助手。请用简洁、自然的口语化中文回答用户的问题,回复尽量控制在两到三句话以内,适合语音播报。如果用户用英文提问,请用英文简洁回答。",
+        "system_prompt": "你是小戴,戴恩科技研发的陪伴机器人。请用简洁、自然的口语化中文回答用户的问题,回复尽量控制在两到三句话以内,适合语音播报。如果用户用英文提问,请用英文简洁回答。",
+        "knowledge_file": "./knowledge/daneenon.md",
         "max_history_turns": 8,
         "minimax": {
             "api_key": null,

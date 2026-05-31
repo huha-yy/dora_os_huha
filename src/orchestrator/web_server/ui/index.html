@@ -42,13 +42,13 @@
       background: linear-gradient(135deg, var(--accent), #1f6feb);
     }
     .brand h1 { font-size: 17px; font-weight: 600; letter-spacing: .2px; }
-    .badges { display: flex; gap: 10px; align-items: center; }
+    .badges { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     .badge {
       display: inline-flex; align-items: center; gap: 7px;
       background: var(--panel-2); border: 1px solid var(--border);
       border-radius: 999px; padding: 5px 12px; font-size: 12.5px; color: var(--muted);
     }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
     .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
     .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
     .dot.danger { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
@@ -56,9 +56,9 @@
     main {
       flex: 1 1 auto;
       display: grid;
-      grid-template-columns: 1fr 400px;
-      gap: 12px;
-      padding: 12px;
+      grid-template-columns: 1fr 380px;
+      gap: 10px;
+      padding: 10px;
       min-height: 0;
     }
     .panel {
@@ -72,7 +72,7 @@
     }
     .panel .head {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      padding: 8px 14px; border-bottom: 1px solid var(--border);
       font-size: 13px; color: var(--muted); flex: 0 0 auto;
     }
     .panel .head .title { color: var(--text); font-weight: 600; }
@@ -96,13 +96,21 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .sidebar iframe { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); min-height: 0; }
-
-    footer {
-      flex: 0 0 auto; padding: 6px 18px; font-size: 11.5px; color: var(--muted);
-      border-top: 1px solid var(--border); background: var(--panel);
-      display: flex; justify-content: space-between;
+    .sidebar {
+      padding: 0;
+      background: var(--bg);
+      border: none;
     }
+    .sidebar iframe {
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: var(--bg);
+      min-height: 0;
+      display: block;
+    }
+
     @media (max-width: 900px) {
       main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
     }
@@ -137,30 +145,19 @@
     </section>
 
     <section class="panel sidebar">
-      <div class="head">
-        <span class="title">Assistant</span>
-        <span id="bot-meta">—</span>
-      </div>
-      <iframe id="chatbot" allow="microphone; autoplay" referrerpolicy="no-referrer"></iframe>
+      <iframe id="chatbot" allow="microphone; autoplay" referrerpolicy="no-referrer" title="Chatbot"></iframe>
     </section>
   </main>
-
-  <footer>
-    <span>RK3588S · RealSense D415 · YOLOv8n (NPU) + MediaPipe</span>
-    <span id="clock"></span>
-  </footer>
 
   <script>
     const CHATBOT_PORT = 8000;
     const host = window.location.hostname || "localhost";
     const proto = window.location.protocol === "https:" ? "https:" : "http:";
 
-    // Embed the chatbot from its own server (port 8000).
-    const chatbotUrl = `${proto}//${host}:${CHATBOT_PORT}/`;
+    const chatbotUrl = `${proto}//${host}:${CHATBOT_PORT}/?embed=1`;
     const iframe = document.getElementById("chatbot");
     iframe.src = chatbotUrl;
 
-    // Live MJPEG video stream from the orchestrator.
     const video = document.getElementById("video");
     const overlay = document.getElementById("video-overlay");
     const overlayText = document.getElementById("overlay-text");
@@ -179,6 +176,31 @@
     const camMeta = document.getElementById("cam-meta");
     const botDot = document.getElementById("bot-dot");
     const botText = document.getElementById("bot-text");
+
+    let chatbotWsConnected = false;
+    let chatbotServerUp = false;
+
+    function setChatbotStatus() {
+      if (chatbotWsConnected) {
+        botDot.className = "dot ok";
+        botText.textContent = "Chatbot connected";
+      } else if (chatbotServerUp) {
+        botDot.className = "dot warn";
+        botText.textContent = "Chatbot connecting…";
+      } else {
+        botDot.className = "dot danger";
+        botText.textContent = "Chatbot offline";
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.source !== "dorabot-chatbot" || data.type !== "connection") {
+        return;
+      }
+      chatbotWsConnected = !!data.connected;
+      setChatbotStatus();
+    });
 
     function updateVideoMeta() {
       const nw = video.naturalWidth || 0;
@@ -200,7 +222,7 @@
         if (s.has_frame && age != null && age < 3) {
           camDot.className = "dot ok";
           camText.textContent = "Camera live";
-          camMeta.textContent = `${age.toFixed(1)}s ago`;
+          camMeta.textContent = age != null ? `${age.toFixed(1)}s ago` : "—";
           overlay.classList.remove("show");
         } else {
           camDot.className = "dot warn";
@@ -217,24 +239,22 @@
       }
     }
 
-    async function pollChatbot() {
+    async function pollChatbotServer() {
       try {
-        await fetch(chatbotUrl, { mode: "no-cors", cache: "no-store" });
-        botDot.className = "dot ok";
-        botText.textContent = "Chatbot up";
+        await fetch(`${proto}//${host}:${CHATBOT_PORT}/`, { mode: "no-cors", cache: "no-store" });
+        chatbotServerUp = true;
       } catch (e) {
-        botDot.className = "dot warn";
-        botText.textContent = "Chatbot…";
+        chatbotServerUp = false;
+        chatbotWsConnected = false;
       }
+      setChatbotStatus();
     }
 
     setInterval(pollVideoStatus, 1500);
-    setInterval(pollChatbot, 4000);
+    setInterval(pollChatbotServer, 4000);
     pollVideoStatus();
-    pollChatbot();
-
-    const clock = document.getElementById("clock");
-    setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); }, 1000);
+    pollChatbotServer();
+    setChatbotStatus();
   </script>
 </body>
 </html>

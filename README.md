@@ -1,176 +1,318 @@
 # Dorabot Workspace
 
-Complete autonomous navigation and assistance robot system.
+Autonomous robot stack: live vision + fall detection, voice chatbot, and (optional) mapping/navigation.
 
 ## Overview
 
-Dorabot is an intelligent robot with:
-- **Vision & Perception**: Real-time object detection, fall detection, person tracking
-- **Mapping & SLAM**: Real-time map generation with RTAB-Map and custom occupancy grid mapping
-- **Navigation**: Autonomous path planning and obstacle avoidance (in development)
-- **AI Integration**: Natural language understanding and task orchestration
-- **User Tracking**: 3D person localization and following (in development)
+On a typical deployment (Orange Pi 5 / RK3588S + RealSense D415), one orchestrator process manages:
 
-## Quick Start
-
-### 1. Basic Operation (AI + Perception)
-
-```bash
-cd ~/dorabot_ws
-python3 src/orchestrator/main.py
+```
+chatbot (:8000) ──┐
+RealSense D415 ───┤
+perception ───────┼──► orchestrator (:8080) ──► unified web UI
+                  │        ├─ live annotated camera (MJPEG)
+fall events ──────┘        └─ chatbot sidebar
 ```
 
-This starts:
-- AI Agent for natural language processing
-- RealSense camera
-- Perception system (fall detection, object detection)
-- HTTP API server
+**Implemented today:** orchestrated services, RealSense camera, YOLO + MediaPipe fall detection, unified monitor UI, voice chatbot (MiniMax LLM).
 
-### 2. With Mapping Capabilities
+**Optional / in development:** RTAB-Map SLAM, 2D mapping, Nav2 navigation.
 
-```bash
-cd ~/dorabot_ws
-./scripts/start_orchestrator_with_mapping.sh --with-rtabmap
-```
+See also **[DEPLOYMENT.md](DEPLOYMENT.md)** for platform-specific notes (RK3588 NPU, performance tuning).
 
-This adds:
-- RTAB-Map SLAM for robust mapping
-- Map Generator for real-time 2D occupancy grids
-- Map Manager for saving/loading maps
+---
 
-### 3. Full Navigation Suite
+## 快速开始 Quick Start
+
+完成下方 [New robot setup](#new-robot-setup) 中的依赖安装后，**通过 SSH 远程登录机器人**即可启动前后端，无需在机器人上接键盘。
+
+**1. 启动后端**（摄像头、感知、聊天机器人、Web 服务）— 在 SSH 终端中运行，保持前台：
 
 ```bash
-cd ~/dorabot_ws
-./scripts/start_orchestrator_full.sh
+bash ~/dorabot_ws/scripts/start_dorabot.sh
 ```
 
-This includes everything above plus Nav2 navigation stack.
+**2. 启动前端**（在机器人屏幕全屏打开监控界面）— **另开一个 SSH 终端**：
+
+```bash
+bash ~/dorabot_ws/scripts/start-frontend-ssh.sh
+```
+
+浏览器会打开 `http://localhost:8080/`（左侧实时画面 + 右侧语音助手）。
+
+**停止：**
+
+```bash
+# 关闭机器人屏幕上的前端
+bash ~/dorabot_ws/scripts/start-frontend-ssh.sh --stop
+
+# 关闭后端：在运行 start_dorabot.sh 的终端按 Ctrl+C
+```
+
+| 脚本 | 作用 |
+|------|------|
+| `scripts/start_dorabot.sh` | 后端：orchestrator + 摄像头 + 感知 + chatbot |
+| `scripts/start-frontend-ssh.sh` | 前端：Chromium 全屏 kiosk（需机器人桌面/X 已启动） |
+| `scripts/start-frontend-local.sh` | 前端：在机器人本机桌面打开浏览器（接键盘时用） |
+
+日志目录：`~/logs/` · 局域网访问 UI：`http://<机器人IP>:8080/`
+
+---
+
+## New robot setup
+
+Target platform: **Ubuntu 22.04 (jammy) arm64**, e.g. Orange Pi 5 with RealSense **D415**.
+
+### Hardware
+
+| Component | Notes |
+|-----------|--------|
+| Board | Orange Pi 5 / RK3588S, 8 GB RAM recommended |
+| Camera | Intel RealSense D415 (USB 3) |
+| Display | 1024×600 panel (or any desktop for local browser mode) |
+| OS | Ubuntu 22.04 LTS |
+
+RK3588 NPU runtime (`librknnrt.so`) should be present on the board image for fast detection. Without it, perception falls back to CPU (~2–5 FPS).
+
+### 1. Clone the workspace
+
+```bash
+git clone <your-repo-url> ~/dorabot_ws
+cd ~/dorabot_ws
+```
+
+### 2. Install system dependencies (sudo)
+
+Run as your normal user — scripts call `sudo` where needed.
+
+**a) ROS 2 Humble + build tools** (required):
+
+```bash
+bash ~/dorabot_ws/scripts/install_ros2_humble.sh
+```
+
+Installs: `ros-humble-ros-base`, `cv-bridge`, `colcon`, `rosdep`, `build-essential`, and adds ROS sourcing to `~/.bashrc`.
+
+> **Note:** This does **not** install `realsense2_camera` (no arm64 apt package). The camera is published via a lightweight **pyrealsense2** node instead.
+
+**b) UI + utilities** (recommended):
+
+```bash
+sudo apt install -y chromium-browser curl git
+```
+
+**c) Python package manager `uv`** (required for venv setup):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc if needed
+```
+
+**d) Camera access** — plug in the D415, add your user to the `video` group, then re-login:
+
+```bash
+sudo usermod -aG video "$USER"
+```
+
+After step 3, verify the camera:
+
+```bash
+source ~/dorabot_ws/.venv/bin/activate
+python -c "import pyrealsense2 as rs; print(list(rs.context().devices))"
+```
+
+**Optional (mapping / SLAM later):**
+
+```bash
+sudo apt install ros-humble-rtabmap-ros ros-humble-nav2-bringup
+```
+
+### 3. Create Python virtual environments (no sudo)
+
+Open a **new terminal** (or `source ~/.bashrc`) so ROS 2 is on your PATH.
+
+**a) Perception + orchestrator** — `~/dorabot_ws/.venv`:
+
+```bash
+source /opt/ros/humble/setup.bash
+bash ~/dorabot_ws/scripts/setup_perception_env.sh
+```
+
+**b) Chatbot** — `~/dorabot_ws/src/chatbot/.venv`:
+
+```bash
+cd ~/dorabot_ws/src/chatbot
+uv venv .venv --python 3.10
+uv pip install -r requirements.txt
+```
+
+ASR/TTS model weights under `src/chatbot/models/` are included in the repo (~1 GB).
+
+### 4. Perception model files
+
+`src/perception/models/` is gitignored. Copy or create models on each robot:
+
+| File / directory | Purpose | How to get it |
+|------------------|---------|---------------|
+| `pose_landmarker_lite.task` | MediaPipe pose | Copy from another robot, or run the `wget` below |
+| `yolo11n_rknn_model/` | **Recommended** — NPU detection | Convert on x86 PC (see below) or `scp` from another robot |
+| `yolov8n.pt` | CPU fallback | Auto-downloads on first YOLO run, or copy from another robot |
+
+Download the pose model:
+
+```bash
+mkdir -p ~/dorabot_ws/src/perception/models
+wget -O ~/dorabot_ws/src/perception/models/pose_landmarker_lite.task \
+  https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
+```
+
+**Convert RKNN model on an x86 Linux PC** (not on the Orange Pi):
+
+```bash
+# on x86 PC:
+bash scripts/convert_yolo_to_rknn.sh yolo11n.pt rk3588
+scp -r yolo11n_rknn_model orangepi@<robot-ip>:~/dorabot_ws/src/perception/models/
+```
+
+Default config uses `yolo11n_rknn_model` — see `configs/orchestrator/config.yaml`.
+
+### 5. Chatbot API key
+
+The LLM reads **`MINIMAX_API_KEY`** from the environment (`config.json` keeps `"api_key": null`):
+
+```bash
+echo 'export MINIMAX_API_KEY="your-key-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Start scripts load this automatically via `scripts/load_minimax_env.sh`.
+
+### 6. Sanity checks
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/dorabot_ws/.venv/bin/activate
+
+python -c "import rclpy, pyrealsense2, cv2, mediapipe; print('deps OK')"
+
+# camera + detection smoke test (no ROS):
+PYTHONPATH=src/perception python src/perception/cam_perception_test.py
+```
+
+安装完成后 → 见上方 **[快速开始](#快速开始-quick-start)**，通过 SSH 启动前后端。
+
+---
+
+## Launch
+
+> **日常启动请直接用上方 [快速开始](#快速开始-quick-start) 中的三条命令。**
+
+### Start backends (orchestrator + chatbot + camera + perception)
+
+```bash
+bash ~/dorabot_ws/scripts/start_dorabot.sh
+```
+
+This starts everything and prints the UI URL, e.g. `http://192.168.x.x:8080/`.
+
+- **Orchestrator** (UI, MJPEG, events): port **8080**
+- **Chatbot** (WebSocket + web UI): port **8000**
+- **Logs:** `~/logs/{chatbot,realsense_d415,perception,camera_mount_tf}.log`
+- **Stop:** `Ctrl+C` in the start terminal (orchestrator tears down all child services)
+
+Custom config:
+
+```bash
+bash ~/dorabot_ws/scripts/start_dorabot.sh -c configs/orchestrator/config_mapping.yaml
+```
+
+### Open the monitor UI
+
+**Remote via SSH** (robot has a display, no local keyboard) — **recommended:**
+
+```bash
+bash ~/dorabot_ws/scripts/start-frontend-ssh.sh
+bash ~/dorabot_ws/scripts/start-frontend-ssh.sh --stop   # stop kiosk
+```
+
+**On the robot desktop** (keyboard attached):
+
+```bash
+bash ~/dorabot_ws/scripts/start-frontend-local.sh
+```
+
+**From any browser on the network:**
+
+```
+http://<robot-ip>:8080/
+```
+
+### Stop / clean up
+
+```bash
+# if start_dorabot.sh is still running: Ctrl+C
+
+# force-kill leftover processes:
+bash ~/dorabot_ws/scripts/stop_orchestrator.sh
+```
+
+### Quick health checks
+
+```bash
+curl -s http://localhost:8080/video/status
+curl -s http://localhost:8080/health
+
+source /opt/ros/humble/setup.bash
+ros2 topic list | grep -E 'camera|body_tracking|fall'
+
+tail -f ~/logs/perception.log | grep FPS    # when print_fps: true in config
+```
+
+---
+
+## Configuration
+
+Main config: **`configs/orchestrator/config.yaml`**
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `orchestrator_port` | `8080` | UI + MJPEG |
+| `camera.width/height/fps` | `424×240 @ 15` | Sized for 1024×600 display |
+| `camera.align_depth` | `false` | Auto-enables when map/SLAM services are on |
+| `camera.flip_180` | `true` | D415 mounted upside down on this robot |
+| `perception.detection_model_name` | `yolo11n_rknn_model` | NPU model directory name |
+| `perception.process_every_n` | `2` | Run detection every N-th frame |
+| `perception.print_fps` | `true` | Log FPS to `~/logs/perception.log` |
+
+Other profiles: `config_mapping.yaml`, `config_slam.yaml`, `config_full.yaml`.
+
+```bash
+python src/orchestrator/main.py --help
+```
+
+---
 
 ## Architecture
 
 ```
 dorabot_ws/
+├── configs/orchestrator/   # YAML service profiles
+├── scripts/                # install, setup, start/stop scripts
 ├── src/
-│   ├── orchestrator/       # Central service orchestration
-│   ├── ai_agent/          # Natural language AI
-│   ├── perception/        # Vision and detection
-│   ├── nav/              # Navigation and mapping
-│   │   ├── mapping/      # Map generation module
-│   │   ├── navigation/   # Path planning (coming soon)
-│   │   └── behaviors/    # Navigation behaviors
-│   └── ...
-├── scripts/               # Convenience startup scripts
-├── maps/                  # Saved navigation maps
-└── logs/                  # Service logs
+│   ├── orchestrator/       # service manager, web UI, MJPEG stream
+│   ├── chatbot/            # voice assistant (own .venv, port 8000)
+│   ├── perception/         # camera publisher, YOLO, fall detection
+│   ├── nav/                # mapping & navigation (optional)
+│   └── ai_agent/           # legacy agent (not used by default stack)
+├── maps/                   # saved navigation maps
+└── logs/                   # runtime logs (~/logs/ at runtime)
 ```
 
-## Key Features
+---
 
-### ✅ Implemented
+## Advanced: mapping & navigation
 
-- **Orchestrated Services**: Single entry point for all components
-- **Fall Detection**: Real-time fall event detection and alerting
-- **Object Detection**: Vision-based object recognition
-- **SLAM Mapping**: RTAB-Map integration for 3D SLAM
-- **2D Mapping**: Custom occupancy grid generation
-- **Map Persistence**: Save and load navigation maps
-- **HTTP API**: RESTful API for control and events
-- **Multi-language AI**: Chinese and English support
-
-### 🚧 In Development
-
-- **Autonomous Navigation**: Nav2-based path planning
-- **User Tracking**: Person detection and following
-- **Voice Control**: Natural language commands
-- **Multi-room Navigation**: Semantic mapping
-
-## Documentation
-
-- **[docs/](docs/)** - Complete documentation directory ⭐
-  - **[Quick Start Guide](docs/QUICK_START_GUIDE.md)** - Start here!
-  - [Mapping Guide](docs/MAPPING_QUICKSTART.md) - How to create maps
-  - [Configuration System](docs/CONFIG_BASED_ORCHESTRATOR.md) - YAML configs
-  - [Service Integration](docs/ORCHESTRATOR_NAVIGATION_INTEGRATION.md) - How it works
-  - [Config Repository](docs/CONFIGS_REPOSITORY_GUIDE.md) - Managing configs
-  - [Workspace Git Guide](docs/WORKSPACE_GIT_GUIDE.md) - Git repository & submodules
-
-- **[src/nav/](src/nav/)** - Module documentation
-  - [Navigation Package](src/nav/README.md) - Package overview
-  - [Mapping API](src/nav/src/mapping/README.md) - API reference
-
-- **[configs/](configs/)** - Configuration files
-  - [Configs Documentation](configs/README.md) - Config repository
-
-- **[change_logs/](change_logs/)** - Development history
-  - [Change Logs](change_logs/README.md) - Implementation details
-
-## Command Reference
-
-### Starting Services
-
-```bash
-# Basic mode
-python3 src/orchestrator/main.py
-
-# With mapping
-python3 src/orchestrator/main.py --enable-mapping
-
-# With SLAM
-python3 src/orchestrator/main.py --enable-mapping --enable-rtabmap
-
-# Full navigation
-./scripts/start_orchestrator_full.sh
-
-# Custom language
-python3 src/orchestrator/main.py --lang en
-```
-
-### Map Management
-
-```bash
-# Save current map
-ros2 service call /map_manager/save_map std_srvs/srv/Trigger
-
-# Load saved map
-ros2 service call /map_manager/load_map std_srvs/srv/Trigger
-
-# List available maps
-ros2 service call /map_manager/list_maps std_srvs/srv/Trigger
-
-# Reset current map
-ros2 service call /map_generator/reset_map std_srvs/srv/Empty
-```
-
-### Visualization
-
-```bash
-# Open RViz with mapping config
-rviz2 -d src/nav/config/mapping.rviz
-
-# View TF tree
-ros2 run tf2_tools view_frames
-
-# Monitor topics
-ros2 topic list
-ros2 topic echo /map
-```
-
-### Diagnostics
-
-```bash
-# Check running nodes
-ros2 node list
-
-# View service logs
-tail -f ~/logs/map_generator.log
-tail -f ~/logs/rtabmap_slam.log
-
-# Test mapping module
-./scripts/test_mapping.sh
-```
-
-## Building the Workspace
+These require a `colcon` build and optional apt packages (see step 2 above).
 
 ```bash
 cd ~/dorabot_ws
@@ -178,190 +320,88 @@ colcon build --merge-install
 source install/setup.bash
 ```
 
-To build specific packages:
 ```bash
-colcon build --packages-select nav --merge-install
+# mapping + RTAB-Map
+bash scripts/start_orchestrator_with_mapping.sh --with-rtabmap
+
+# full stack including Nav2
+bash scripts/start_orchestrator_full.sh
 ```
 
-## Configuration
+See **[docs/QUICK_START_GUIDE.md](docs/QUICK_START_GUIDE.md)** and **[docs/MAPPING_QUICKSTART.md](docs/MAPPING_QUICKSTART.md)** for details.
 
-### Mapping Parameters
-
-Edit `src/nav/config/map_generator.yaml`:
-```yaml
-map_generator:
-  ros__parameters:
-    map_resolution: 0.05      # 5cm per pixel
-    map_width: 10.0           # 10 meters
-    update_rate: 2.0          # 2 Hz
-```
-
-### Orchestrator Options
-
-See all options:
-```bash
-python3 src/orchestrator/main.py --help
-```
-
-Key options:
-- `--lang <zh|en>` - Language selection
-- `--enable-mapping` - Enable map generation
-- `--enable-rtabmap` - Enable RTAB-Map SLAM
-- `--enable-navigation` - Enable Nav2 navigation
-- `--skip-sub-services` - Minimal mode
-
-## System Requirements
-
-### Hardware
-- Intel RealSense D435i camera
-- 4GB+ RAM (8GB recommended with SLAM)
-- Quad-core CPU (or better)
-- Ubuntu 22.04 LTS
-
-### Software
-- ROS2 Humble
-- Python 3.10+
-- OpenCV 4.x
-- RTAB-Map (optional, for SLAM)
-- Nav2 (optional, for navigation)
-
-### Dependencies
+### Map management (when mapping is running)
 
 ```bash
-# ROS2 packages
-sudo apt install ros-humble-realsense2-camera
-sudo apt install ros-humble-rtabmap-ros
-sudo apt install ros-humble-nav2-bringup
-
-# Python packages
-pip3 install numpy opencv-python pyyaml click uvicorn fastapi
+ros2 service call /map_manager/save_map std_srvs/srv/Trigger
+ros2 service call /map_manager/load_map std_srvs/srv/Trigger
+ros2 service call /map_manager/list_maps std_srvs/srv/Trigger
+ros2 service call /map_generator/reset_map std_srvs/srv/Empty
 ```
 
-## Project Structure
-
-```
-dorabot_ws/
-├── src/
-│   ├── orchestrator/          # Service orchestration
-│   │   ├── main.py           # Entry point
-│   │   ├── ros_node.py       # ROS2 node
-│   │   └── services/         # Service management
-│   ├── ai_agent/             # AI assistant
-│   ├── perception/           # Vision system
-│   └── nav/                  # Navigation module
-│       ├── src/mapping/      # Mapping implementation
-│       ├── launch/           # Launch files
-│       ├── config/           # Configuration
-│       └── params/           # Parameters
-├── scripts/                   # Convenience scripts
-│   ├── start_orchestrator_with_mapping.sh
-│   ├── start_orchestrator_full.sh
-│   ├── start_slam.sh         # Legacy standalone
-│   └── test_mapping.sh
-├── maps/                      # Saved maps
-├── logs/                      # Service logs
-└── docs/                      # Documentation
-```
+---
 
 ## Troubleshooting
 
 ### Camera not detected
-```bash
-# Check camera
-rs-enumerate-devices
-
-# Restart udev
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-### Services won't start
-```bash
-# Check logs
-ls -lh ~/logs/
-cat ~/logs/<service_name>.log
-
-# Verify workspace is sourced
-source ~/dorabot_ws/install/setup.bash
-
-# Kill existing processes
-pkill -f orchestrator
-pkill -f realsense
-```
-
-### Build errors
-```bash
-# Clean build
-rm -rf build/ install/ log/
-colcon build --merge-install
-```
-
-### Map quality issues
-- Move camera slowly
-- Ensure good lighting
-- Adjust parameters in config files
-- See [MAPPING_QUICKSTART.md](MAPPING_QUICKSTART.md)
-
-## Development
-
-### Adding New Features
-
-1. Implement in appropriate module (`src/nav/`, `src/perception/`, etc.)
-2. Add service definition to `src/orchestrator/services/specs.py`
-3. Add CLI option to `src/orchestrator/main.py`
-4. Update documentation
-5. Test thoroughly
-
-### Running Tests
 
 ```bash
-# Test mapping module
-./scripts/test_mapping.sh
+# after venv is set up:
+source ~/dorabot_ws/.venv/bin/activate
+python -c "import pyrealsense2 as rs; print(list(rs.context().devices))"
 
-# Run ROS2 tests
-colcon test --packages-select nav
+sudo udevadm control --reload-rules && sudo udevadm trigger
+# re-plug USB; ensure user is in group 'video'
 ```
 
-## Contributing
+### `rclpy not importable`
 
-1. Create feature branch
-2. Implement changes
-3. Test thoroughly
-4. Update documentation
-5. Submit for review
+ROS 2 must be sourced **before** the venv:
 
-## Roadmap
+```bash
+source /opt/ros/humble/setup.bash
+source ~/dorabot_ws/.venv/bin/activate
+python -c "import rclpy"
+```
 
-- [x] Service orchestration
-- [x] Fall detection
-- [x] SLAM integration
-- [x] 2D map generation
-- [x] Map persistence
-- [ ] Autonomous navigation
-- [ ] User tracking and following
-- [ ] Voice commands
-- [ ] Multi-room navigation
-- [ ] Semantic mapping
-- [ ] Task scheduling
-- [ ] Remote monitoring
+### Chatbot LLM fails to init
 
-## Support
+```bash
+grep MINIMAX_API_KEY ~/.bashrc
+bash ~/dorabot_ws/scripts/load_minimax_env.sh && echo "${MINIMAX_API_KEY:+set}"
+```
 
-- Documentation: Check the docs in this repository
-- Logs: `~/logs/`
-- ROS2 topics: `ros2 topic list`
-- Service status: `ros2 node list`
+### Stream unavailable / services exit immediately
 
-## License
+```bash
+tail -30 ~/logs/perception.log
+tail -30 ~/logs/realsense_d415.log
+tail -30 ~/logs/chatbot.log
+```
 
-Proprietary - Dorabot Project
+Common causes: missing perception models, wrong CLI flags, port 8000/8080 already in use.
 
-## Contact
+### Perception slow on CPU
 
-Maintainer: frank (frank123111@gmail.com)
+Ensure `yolo11n_rknn_model/` exists and `detection_model_name` points to it in config. CPU fallback (`yolov8n.pt`) works but is much slower.
 
 ---
 
-**Status**: Active Development  
-**Version**: 0.1.0  
-**Last Updated**: January 2026
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Orange Pi / RK3588 bring-up, NPU models, topics & ports |
+| [docs/QUICK_START_GUIDE.md](docs/QUICK_START_GUIDE.md) | Legacy quick start (mapping-focused) |
+| [docs/MAPPING_QUICKSTART.md](docs/MAPPING_QUICKSTART.md) | Creating maps |
+| [configs/README.md](configs/README.md) | Configuration profiles |
+
+---
+
+## License
+
+Proprietary — Dorabot Project
+
+**Maintainer:** frank (frank123111@gmail.com)
+
+**Status:** Active development · **Last updated:** May 2026

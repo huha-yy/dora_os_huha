@@ -19,6 +19,7 @@ URL="http://localhost:8080/"
 DISPLAY_NUM=":0"
 XAUTH="${HOME}/.Xauthority"
 LOGFILE="/tmp/chromium-dorabot-ui.log"
+PROFILE_DIR="${HOME}/.cache/chromium-dorabot-kiosk"
 PATTERN="chromium.*localhost:8080"
 
 stop_kiosk() {
@@ -80,12 +81,16 @@ if ! curl -sf -o /dev/null "$URL"; then
 fi
 
 echo "Launching kiosk on display $DISPLAY_NUM ..."
+mkdir -p "$PROFILE_DIR"
 DISPLAY="$DISPLAY_NUM" \
 XAUTHORITY="$XAUTH" \
 nohup chromium-browser \
     --app="$URL" \
+    --user-data-dir="$PROFILE_DIR" \
     --autoplay-policy=no-user-gesture-required \
-    --use-fake-ui-for-media-stream \
+    --disable-infobars \
+    --no-first-run \
+    --no-default-browser-check \
     > "$LOGFILE" 2>&1 &
 disown
 

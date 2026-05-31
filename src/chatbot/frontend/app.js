@@ -17,6 +17,10 @@ class ChatbotClient {
         this.heartbeatInterval = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+        this.embedMode = new URLSearchParams(window.location.search).get('embed') === '1';
+        if (this.embedMode) {
+            document.body.classList.add('embed');
+        }
 
         // DOM Elements
         this.elements = {
@@ -27,6 +31,8 @@ class ChatbotClient {
             sendBtn: document.getElementById('send-btn'),
             micBtn: document.getElementById('mic-btn'),
             interruptBtn: document.getElementById('interrupt-btn'),
+            debugToggleBtn: document.getElementById('debug-toggle-btn'),
+            debugPanel: document.getElementById('debug-panel'),
             debugLog: document.getElementById('debug-log'),
             clearDebug: document.getElementById('clear-debug'),
             audioPlayer: document.getElementById('audio-player'),
@@ -58,10 +64,35 @@ class ChatbotClient {
         // Interrupt button
         this.elements.interruptBtn.addEventListener('click', () => this.sendInterrupt());
 
+        // Debug log toggle
+        this.elements.debugToggleBtn.addEventListener('click', () => this.toggleDebugPanel());
+
         // Clear debug log
         this.elements.clearDebug.addEventListener('click', () => {
             this.elements.debugLog.innerHTML = '';
         });
+    }
+
+    toggleDebugPanel() {
+        const panel = this.elements.debugPanel;
+        const open = panel.hasAttribute('hidden');
+        if (open) {
+            panel.removeAttribute('hidden');
+            this.elements.debugToggleBtn.classList.add('active');
+        } else {
+            panel.setAttribute('hidden', '');
+            this.elements.debugToggleBtn.classList.remove('active');
+        }
+    }
+
+    notifyParentConnection(connected) {
+        if (window.parent === window) {
+            return;
+        }
+        window.parent.postMessage(
+            { source: 'dorabot-chatbot', type: 'connection', connected },
+            '*',
+        );
     }
 
     // ==================== WebSocket Connection ====================
@@ -86,6 +117,7 @@ class ChatbotClient {
 
     onOpen() {
         this.log('receive', 'Connected to server');
+        this.elements.micBtn.classList.remove('mic-offline');
         this.updateConnectionStatus(true);
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -111,7 +143,7 @@ class ChatbotClient {
         this.updateConnectionStatus(false);
         this.stopHeartbeat();
         this.stopListening();
-        this.elements.micBtn.querySelector('.mic-text').textContent = 'Disconnected';
+        this.setMicState('offline', 'Disconnected');
 
         // Attempt to reconnect
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -136,9 +168,11 @@ class ChatbotClient {
 
             case 'set-model-and-conf':
                 this.clientUid = data.client_uid;
-                this.addMessage('system', `Connected as ${data.client_uid?.slice(0, 8)}...`);
-                if (data.conf_name) {
-                    this.addMessage('system', `Config: ${data.conf_name}`);
+                if (!this.embedMode) {
+                    this.addMessage('system', `Connected as ${data.client_uid?.slice(0, 8)}...`);
+                    if (data.conf_name) {
+                        this.addMessage('system', `Config: ${data.conf_name}`);
+                    }
                 }
                 break;
 
@@ -196,8 +230,9 @@ class ChatbotClient {
                 break;
             case 'speech-detected':
                 this.log('receive', 'VAD detected speech end');
-                // Add a visual indicator that speech was detected
-                this.addMessage('system', '[Speech detected, processing...]');
+                if (!this.embedMode) {
+                    this.addMessage('system', '[Speech detected, processing...]');
+                }
                 break;
             case 'vad-pause':
                 this.log('receive', 'VAD pause');
@@ -244,7 +279,9 @@ class ChatbotClient {
             type: 'interrupt-signal',
             text: ''
         });
-        this.addMessage('system', 'Interrupt sent');
+        if (!this.embedMode) {
+            this.addMessage('system', 'Interrupt sent');
+        }
     }
 
     // ==================== Audio Recording ====================
@@ -278,34 +315,36 @@ class ChatbotClient {
             const source = this.audioContext.createMediaStreamSource(stream);
             this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
             this.stream = stream;
-            this.isMicActive = true;
-            this.isRecording = true;
-            
+
             this.scriptProcessor.onaudioprocess = (event) => {
                 if (!this.isMicActive) return;
-                
+
                 const inputData = event.inputBuffer.getChannelData(0);
-                // Copy the data (inputData is reused)
                 const chunk = new Float32Array(inputData);
-                
-                // Stream audio to server for VAD processing
+
                 this.send({
                     type: 'raw-audio-data',
                     audio: Array.from(chunk)
                 });
             };
-            
+
             source.connect(this.scriptProcessor);
             this.scriptProcessor.connect(this.audioContext.destination);
-            
-            this.elements.micBtn.classList.add('recording');
-            this.elements.micBtn.querySelector('.mic-text').textContent = '🔴 Listening... (Click to Mute)';
+
+            this.isMicActive = true;
+            this.isRecording = true;
+            this.setMicState('listening', 'Listening');
             this.log('send', 'Microphone activated - streaming to server');
-            this.addMessage('system', '🎤 Listening started. Speak anytime - I will detect when you finish.');
+            if (!this.embedMode) {
+                this.addMessage('system', '🎤 Listening started. Speak anytime - I will detect when you finish.');
+            }
 
         } catch (error) {
             this.log('error', `Microphone access denied: ${error.message}`);
-            this.addMessage('system', 'Microphone access denied. Please allow microphone access.');
+            this.setMicState('muted', 'Muted');
+            if (!this.embedMode) {
+                this.addMessage('system', 'Microphone access denied. Please allow microphone access.');
+            }
         }
     }
 
@@ -329,10 +368,31 @@ class ChatbotClient {
             this.stream = null;
         }
         
-        this.elements.micBtn.classList.remove('recording');
-        this.elements.micBtn.querySelector('.mic-text').textContent = '🎤 Muted (Click to Listen)';
+        this.setMicState('muted', 'Muted');
         this.log('send', 'Microphone deactivated');
-        this.addMessage('system', '🔇 Microphone muted. Click to resume listening.');
+        if (!this.embedMode) {
+            this.addMessage('system', '🔇 Microphone muted. Click to resume listening.');
+        }
+    }
+
+    setMicState(state, label) {
+        const btn = this.elements.micBtn;
+        btn.classList.remove('mic-listening', 'mic-muted', 'mic-offline');
+        if (state === 'listening') {
+            btn.classList.add('mic-listening');
+        } else if (state === 'muted') {
+            btn.classList.add('mic-muted');
+        } else if (state === 'offline') {
+            btn.classList.add('mic-offline');
+        }
+        this.setMicLabel(label);
+    }
+
+    setMicLabel(text) {
+        const label = this.elements.micBtn.querySelector('.mic-text');
+        if (label) {
+            label.textContent = text;
+        }
     }
 
     // ==================== Audio Playback ====================
@@ -419,13 +479,20 @@ class ChatbotClient {
     }
 
     updateConnectionStatus(connected) {
-        if (connected) {
-            this.elements.connectionStatus.classList.add('connected');
-            this.elements.statusText.textContent = 'Connected';
-        } else {
-            this.elements.connectionStatus.classList.remove('connected');
-            this.elements.statusText.textContent = 'Disconnected';
+        if (this.elements.connectionStatus) {
+            if (connected) {
+                this.elements.connectionStatus.classList.add('connected');
+                if (this.elements.statusText) {
+                    this.elements.statusText.textContent = 'Connected';
+                }
+            } else {
+                this.elements.connectionStatus.classList.remove('connected');
+                if (this.elements.statusText) {
+                    this.elements.statusText.textContent = 'Disconnected';
+                }
+            }
         }
+        this.notifyParentConnection(connected);
     }
 
     scrollToBottom() {
