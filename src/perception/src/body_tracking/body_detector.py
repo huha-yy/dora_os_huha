@@ -35,15 +35,29 @@ if not logging.root.handlers:  # Only configure if logging hasn't been configure
 class BodyDetector:
     def __init__(
         self,
-        detection_model_name: str = "yolov8l.pt",
+        detection_model_name: str = "yolo11n_rknn_model",
         pose_model_name: str = "pose_landmarker_lite.task",
         mode: str = "live_stream",
     ) -> None:
+        # `detection_model_name` may be either:
+        #   - a CPU PyTorch model file, e.g. "yolov8n.pt" (fallback), or
+        #   - a Rockchip NPU model directory, e.g. "yolo11n_rknn_model"
+        #     produced on an x86 host via `yolo export ... format=rknn name=rk3588`.
+        # Ultralytics' AutoBackend detects the .rknn directory and runs it on the
+        # RK3588 NPU via rknn-toolkit-lite2, so the rest of this class is unchanged.
         cwd = os.getcwd()
         detection_model_path = os.path.join(
             cwd, "src/perception/models", detection_model_name
         )
+        if not os.path.exists(detection_model_path):
+            logger.warning(
+                "Detection model not found at %s; passing name directly to YOLO "
+                "(it may auto-download the CPU weights).",
+                detection_model_path,
+            )
+            detection_model_path = detection_model_name
         pose_model_path = os.path.join(cwd, "src/perception/models", pose_model_name)
+        logger.info("Loading detection model: %s", detection_model_path)
         self.model = YOLO(detection_model_path, verbose=False)
         # Dictionary to store pose detection results from async callback, keyed by timestamp
         self.pose_results = {}

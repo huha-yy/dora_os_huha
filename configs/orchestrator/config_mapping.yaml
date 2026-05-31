@@ -2,7 +2,7 @@
 # Enables custom map generation and management
 
 language: "zh"
-orchestrator_port: 8000
+orchestrator_port: 8080
 
 services:
   # Core services
@@ -22,6 +22,12 @@ perception:
 
 camera:
   align_depth: true
+  flip_180: true
+  mount_tf_parent: base_link
+  mount_tf_child: camera_link
+  mount_tf_yaw: 3.14159
+  mount_tf_pitch: 0.0
+  mount_tf_roll: 0.0
   
 mapping:
   config_file: "configs/nav/map_generator.yaml"

@@ -23,12 +23,30 @@ class PerceptionConfig:
     """Perception service configuration."""
     debug_video_path: Optional[str] = None
     print_fps: bool = False
+    # Run YOLO + pose every N-th camera frame (1 = every frame).
+    process_every_n: int = 1
+    # RKNN model dir under src/perception/models/, or a .pt file for CPU fallback.
+    detection_model_name: str = "yolo11n_rknn_model"
 
 
 @dataclass
 class CameraConfig:
     """Camera configuration."""
     align_depth: bool = True
+    width: int = 640
+    height: int = 480
+    fps: int = 30
+    # D415 mounted upside down: rotate images 180° and publish a mount TF.
+    flip_180: bool = True
+    mount_tf_parent: str = "base_link"
+    mount_tf_child: str = "camera_link"
+    # static_transform_publisher args: x y z yaw pitch roll (radians)
+    mount_tf_x: float = 0.0
+    mount_tf_y: float = 0.0
+    mount_tf_z: float = 0.0
+    mount_tf_yaw: float = 3.14159
+    mount_tf_pitch: float = 0.0
+    mount_tf_roll: float = 0.0
 
 
 @dataclass
@@ -57,7 +75,7 @@ class RTABMapConfig:
 class OrchestratorConfig:
     """Complete orchestrator configuration."""
     language: str = "zh"
-    orchestrator_port: int = 8000
+    orchestrator_port: int = 8080
     services: ServiceConfig = field(default_factory=ServiceConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
@@ -104,12 +122,28 @@ def load_config(config_path: str) -> OrchestratorConfig:
     perception = PerceptionConfig(
         debug_video_path=perception_data.get('debug_video_path'),
         print_fps=perception_data.get('print_fps', False),
+        process_every_n=int(perception_data.get('process_every_n', 1)),
+        detection_model_name=perception_data.get(
+            'detection_model_name', 'yolo11n_rknn_model'
+        ),
     )
     
     # Parse camera configuration
     camera_data = yaml_data.get('camera', {})
     camera = CameraConfig(
         align_depth=camera_data.get('align_depth', True),
+        width=int(camera_data.get('width', 640)),
+        height=int(camera_data.get('height', 480)),
+        fps=int(camera_data.get('fps', 30)),
+        flip_180=camera_data.get('flip_180', True),
+        mount_tf_parent=camera_data.get('mount_tf_parent', 'base_link'),
+        mount_tf_child=camera_data.get('mount_tf_child', 'camera_link'),
+        mount_tf_x=float(camera_data.get('mount_tf_x', 0.0)),
+        mount_tf_y=float(camera_data.get('mount_tf_y', 0.0)),
+        mount_tf_z=float(camera_data.get('mount_tf_z', 0.0)),
+        mount_tf_yaw=float(camera_data.get('mount_tf_yaw', 3.14159)),
+        mount_tf_pitch=float(camera_data.get('mount_tf_pitch', 0.0)),
+        mount_tf_roll=float(camera_data.get('mount_tf_roll', 0.0)),
     )
     
     # Parse mapping configuration
@@ -137,7 +171,7 @@ def load_config(config_path: str) -> OrchestratorConfig:
     # Create complete configuration
     config = OrchestratorConfig(
         language=yaml_data.get('language', 'zh'),
-        orchestrator_port=yaml_data.get('orchestrator_port', 8000),
+        orchestrator_port=yaml_data.get('orchestrator_port', 8080),
         services=services,
         perception=perception,
         camera=camera,

@@ -22,9 +22,13 @@ fi
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 
+WS_SCRIPTS="$(cd "$SCRIPT_DIR/../../.." && pwd)/scripts"
+# shellcheck disable=SC1091
+source "${WS_SCRIPTS}/load_minimax_env.sh"
+
 if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
-    echo "warning: MINIMAX_API_KEY is not set in this shell." >&2
-    echo "         If it is also not set in config.json, the LLM will fail to init." >&2
+    echo "warning: MINIMAX_API_KEY not set (expected in ~/.bashrc)." >&2
+    echo "         The LLM will fail to init without it." >&2
 fi
 
 cd "$CHATBOT_DIR"

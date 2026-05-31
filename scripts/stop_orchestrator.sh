@@ -54,6 +54,7 @@ kill_processes "src/perception/main.py" "Perception"
 echo -e "${BLUE}[4/8] Stopping RealSense Camera${NC}"
 kill_processes "realsense2_camera_node" "RealSense Camera Node"
 kill_processes "realsense2_camera" "RealSense Camera (all instances)"
+kill_processes "run_camera.py" "RealSense Publisher (pyrealsense2)"
 kill_processes "rs_launch.py" "RealSense Launch"
 
 # Stop Map Generator
@@ -66,7 +67,7 @@ kill_processes "map_manager" "Map Manager"
 
 # Stop Static TF Publisher
 echo -e "${BLUE}[7/8] Stopping Static TF Publisher${NC}"
-kill_processes "static_transform_publisher.*map.*camera_link" "Static TF Publisher"
+kill_processes "static_transform_publisher.*camera_link" "Static TF Publisher (camera)"
 
 # Stop RTAB-Map (if running)
 echo -e "${BLUE}[8/8] Stopping RTAB-Map SLAM (if running)${NC}"

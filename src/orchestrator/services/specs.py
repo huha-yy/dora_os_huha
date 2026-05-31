@@ -38,35 +38,77 @@ def build_services(config) -> List[Service]:
     workspace_root = os.getcwd()
     services = []
     
-    # AI Agent
+    # AI Agent / Chatbot
+    # Runs the new standalone chatbot (src/chatbot) using ITS OWN virtualenv,
+    # which carries its ASR/TTS/LLM/VAD dependencies and config.json (port 8000).
     if config.services.ai_agent:
+        chatbot_dir = os.path.join(workspace_root, "src", "chatbot")
+        chatbot_python = os.path.join(chatbot_dir, ".venv", "bin", "python")
+        # Fall back to the current interpreter if the chatbot venv is missing.
+        if not os.path.exists(chatbot_python):
+            chatbot_python = sys.executable
         services.append(
             Service(
-                name="ai_agent",
-                command=[sys.executable, "src/ai_agent/run_server.py", "--lang", config.language],
-                cwd=workspace_root,
+                name="chatbot",
+                command=[chatbot_python, "main.py", "--log-level", "INFO"],
+                cwd=chatbot_dir,
+                # Clear ROS 2's PYTHONPATH/AMENT entries so they don't shadow the
+                # chatbot venv's own packages (e.g. numpy) when the orchestrator
+                # is launched with ROS 2 sourced.
+                env={"PYTHONPATH": "", "AMENT_PREFIX_PATH": ""},
             )
         )
     
     # RealSense Camera
+    # Lightweight pyrealsense2-backed ROS publisher (replaces realsense2_camera,
+    # which has no arm64 apt binary). Publishes /camera/camera/color/image_raw.
     if config.services.realsense_camera:
-        camera_cmd = [
-            "ros2",
-            "launch",
-            "realsense2_camera",
-            "rs_launch.py",
-        ]
-        
-        if config.camera.align_depth:
-            camera_cmd.append("align_depth.enable:=true")
-        
+        camera_cmd = [sys.executable, "src/perception/run_camera.py"]
+        camera_cmd.extend([
+            "--width", str(config.camera.width),
+            "--height", str(config.camera.height),
+            "--fps", str(config.camera.fps),
+        ])
+        # Depth alignment is required for mapping/SLAM; auto-enable when those run.
+        need_depth = (
+            config.camera.align_depth
+            or config.services.map_generator
+            or config.services.rtabmap_slam
+        )
+        if need_depth:
+            camera_cmd.append("--enable-depth")
+        if config.camera.flip_180:
+            camera_cmd.append("--flip-180")
         services.append(
             Service(
                 name="realsense_d415",
-                command=_wrap_ros2_command(camera_cmd, workspace_root),
+                command=camera_cmd,
+                cwd=workspace_root,
                 use_process_group=True,
             )
         )
+        # Correct 3D / point-cloud frames when the camera is mounted upside down.
+        if config.camera.flip_180:
+            c = config.camera
+            mount_tf_cmd = [
+                "ros2", "run", "tf2_ros", "static_transform_publisher",
+                str(c.mount_tf_x),
+                str(c.mount_tf_y),
+                str(c.mount_tf_z),
+                str(c.mount_tf_yaw),
+                str(c.mount_tf_pitch),
+                str(c.mount_tf_roll),
+                c.mount_tf_parent,
+                c.mount_tf_child,
+            ]
+            services.append(
+                Service(
+                    name="camera_mount_tf",
+                    command=mount_tf_cmd,
+                    cwd=workspace_root,
+                    use_process_group=True,
+                )
+            )
     
     # Perception System
     if config.services.perception:
@@ -77,6 +119,15 @@ def build_services(config) -> List[Service]:
         
         if config.perception.print_fps:
             perception_cmd.append("--print-fps")
+
+        if config.perception.process_every_n > 1:
+            perception_cmd.extend([
+                "--process-every-n", str(config.perception.process_every_n),
+            ])
+
+        perception_cmd.extend([
+            "--detection_model_name", config.perception.detection_model_name,
+        ])
         
         services.append(
             Service(

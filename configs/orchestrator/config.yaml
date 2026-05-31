@@ -3,7 +3,7 @@
 
 # Core settings
 language: "zh"  # Language for AI agent (zh or en)
-orchestrator_port: 8000
+orchestrator_port: 8080  # UI + MJPEG + events API (chatbot uses 8000 separately)
 
 # Note: Virtual environment should be activated in bash scripts before running
 # Example: source ~/dorabot_ws/.venv/bin/activate
@@ -24,10 +24,25 @@ services:
 # Service-specific settings
 perception:
   debug_video_path: null  # Path to debug video file (null for real camera)
-  print_fps: false
+  print_fps: true
+  process_every_n: 2  # Run YOLO + pose every 2nd frame; skipped frames reuse last overlay
+  detection_model_name: yolo11n_rknn_model  # NPU (RK3588); use yolov8n.pt for CPU fallback
 
 camera:
-  align_depth: true  # Enable depth alignment (required for mapping)
+  # Depth off while mapping/SLAM are disabled; set true (or enable map services) later.
+  align_depth: false
+  # Robot display is 1024×600; video panel renders ~588×441 — 424×240 is enough.
+  width: 424
+  height: 240
+  fps: 15
+  # D415 is mounted upside down on this robot — flip images and publish mount TF.
+  flip_180: true
+  mount_tf_parent: base_link
+  mount_tf_child: camera_link
+  # static_transform_publisher: x y z yaw pitch roll (radians)
+  mount_tf_yaw: 3.14159
+  mount_tf_pitch: 0.0
+  mount_tf_roll: 0.0
   
 mapping:
   config_file: "configs/nav/map_generator.yaml"

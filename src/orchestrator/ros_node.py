@@ -12,7 +12,9 @@ from typing import Optional
 import logging
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
+from sensor_msgs.msg import Image
 
 # Configure logging format to include line numbers for ROS2 loggers
 logging.basicConfig(
@@ -39,7 +41,11 @@ class DorabotOrchestratorNode(Node):
     - (Later: subscribes to SLAM, follow, wheel status, etc.)
     """
 
-    def __init__(self, fall_topic_name: str = "fall_event") -> None:
+    def __init__(
+        self,
+        fall_topic_name: str = "fall_event",
+        annotated_topic_name: str = "/body_tracking/image_annotated",
+    ) -> None:
         super().__init__("dorabot_orchestrator")
         self.logger = self.get_logger()
         self.logger.info(
@@ -52,12 +58,53 @@ class DorabotOrchestratorNode(Node):
             self._fall_callback,
             10,
         )
+
+        # Subscribe to annotated frames and feed the web MJPEG stream.
+        self._bridge = None
+        try:
+            from cv_bridge import CvBridge
+
+            self._bridge = CvBridge()
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=2,
+            )
+            self._annotated_sub = self.create_subscription(
+                Image,
+                annotated_topic_name,
+                self._annotated_callback,
+                image_qos,
+            )
+            self.logger.info(
+                f"Subscribed to annotated frames on '{annotated_topic_name}'"
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.warn(
+                f"Annotated-frame bridge unavailable ({exc}); video stream disabled."
+            )
         self.robot_state = RobotState()
         self.scheduler = AsyncScheduler()
         self.scheduler.start()
         self.action_registry = ActionExecutorRegistry(self.scheduler)
         register_executors(self.action_registry, self)
         self.ai_agent_url = AI_AGENT_URL
+
+    def _annotated_callback(self, msg: Image) -> None:
+        """Encode the latest annotated frame as JPEG for the web MJPEG stream."""
+        if self._bridge is None:
+            return
+        try:
+            import cv2
+
+            from orchestrator.web_server.frame_bus import frame_bus
+
+            cv_image = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            ok, buf = cv2.imencode(".jpg", cv_image, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if ok:
+                frame_bus.set_jpeg(buf.tobytes())
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.debug(f"Failed to encode annotated frame: {exc}")
 
     def _fall_callback(self, msg: String) -> None:
         """
