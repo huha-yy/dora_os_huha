@@ -60,3 +60,7 @@ cache/
 # maps/*.yaml
 # maps/*.png
 
+# Large Models
+*.onnx
+*.pt
+*.rknn
