@@ -2,6 +2,8 @@ from collections import deque
 from enum import Enum
 import json
 import os
+import subprocess
+import time
 from typing import Callable, Deque, Dict, List, Optional, TypedDict
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -9,6 +11,7 @@ from service_context import ServiceContext
 from loguru import logger
 import numpy as np
 from response_awaiter import response_awaiter
+from skills.arm_control.skill import ArmControlSkill
 
 
 FALLBACK_REPLY = "抱歉,我现在没法回答你的问题,请稍后再试。"
@@ -35,6 +38,8 @@ class WebSocketHandler:
         self.client_contexts: Dict[str, ServiceContext] = {}
         self.received_data_buffers: Dict[str, np.ndarray] = {}
         self.client_histories: Dict[str, Deque[dict]] = {}
+        self._cooldown_until: Dict[str, float] = {}
+        self._cooldown_seconds = 12.0
         self.message_handlers: Dict[str, Callable] = self._init_message_handlers()
 
     def _history_for(self, client_uid: str, context: ServiceContext) -> Deque[dict]:
@@ -70,6 +75,24 @@ class WebSocketHandler:
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": reply})
         return reply
+
+    @staticmethod
+    def _play_audio_local(audio_path: str, websocket: WebSocket = None):
+        if not audio_path or not os.path.exists(audio_path):
+            return
+        if websocket is not None and websocket.client.host in ("127.0.0.1", "::1"):
+            logger.info(f"Skipping local playback (local kiosk client): {audio_path}")
+            return
+        try:
+            subprocess.Popen(
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"Local audio playback started: {audio_path}")
+        except Exception as e:
+            logger.error(f"Failed to play audio locally: {e}")
 
     def _init_message_handlers(self) -> Dict[str, Callable]:
         """Initialize message type to handler mapping"""
@@ -269,6 +292,15 @@ class WebSocketHandler:
         chunk = data.get("audio", [])
         if not chunk:
             return
+        
+        # TEMP DEBUG: log first audio chunk arrival
+        if not hasattr(self, '_audio_debug_logged'):
+            self._audio_debug_logged = set()
+        if client_uid not in self._audio_debug_logged:
+            self._audio_debug_logged.add(client_uid)
+            max_val = max(abs(v) for v in chunk) if chunk else 0
+            logger.info(f"AUDIO-DEBUG: received first chunk from {client_uid[:8]}, "
+                       f"len={len(chunk)}, max_amp={max_val:.4f}")
             
         # If VAD is available, use it for speech detection
         if context.vad_engine:
@@ -282,6 +314,13 @@ class WebSocketHandler:
                         json.dumps({"type": "control", "text": "vad-resume"})
                     )
                 elif len(audio_bytes) > 1024:
+                    # Check if client is in cooldown (ignore echo during TTS)
+                    cooldown = self._cooldown_until.get(client_uid, 0)
+                    if cooldown > time.time():
+                        logger.debug(f"[Cooldown] Ignoring VAD output for {client_uid[:8]}, "
+                                     f"{cooldown - time.time():.1f}s remaining")
+                        continue
+
                     # VAD detected speech end - convert and store audio
                     audio_float = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                     self.received_data_buffers[client_uid] = audio_float
@@ -322,9 +361,31 @@ class WebSocketHandler:
                         "text": user_text,
                     })
 
-                    robot_response = await self._generate_reply(
-                        context, client_uid, user_text
-                    )
+                    # 检查机械臂 Skill 关键词匹配
+                    arm_skill = getattr(context, "arm_skill", None)
+                    matched_action = arm_skill.match(user_text) if arm_skill else None
+
+                    # 检查舵机 Skill 关键词匹配
+                    servo_skill = getattr(context, "servo_skill", None)
+                    matched_servo = servo_skill.match(user_text) if servo_skill else None
+
+                    # 检查底盘 Skill 关键词匹配
+                    chassis_skill = getattr(context, "chassis_skill", None)
+                    matched_chassis = chassis_skill.match(user_text) if chassis_skill else None
+
+                    if matched_action:
+                        ok, msg = arm_skill.execute(matched_action)
+                        robot_response = msg
+                    elif matched_servo:
+                        ok, msg = servo_skill.execute(matched_servo)
+                        robot_response = msg
+                    elif matched_chassis:
+                        ok, msg = chassis_skill.execute(matched_chassis)
+                        robot_response = msg
+                    else:
+                        robot_response = await self._generate_reply(
+                            context, client_uid, user_text
+                        )
 
                     audio_url = None
                     if context.tts_engine:
@@ -334,6 +395,7 @@ class WebSocketHandler:
                             if audio_path:
                                 audio_filename = os.path.basename(audio_path)
                                 audio_url = f"/cache/{audio_filename}"
+                                self._play_audio_local(audio_path, websocket)
                         except Exception as e:
                             logger.error(f"TTS error: {e}")
 
@@ -342,6 +404,7 @@ class WebSocketHandler:
                         "text": robot_response,
                         "audio": audio_url,
                     })
+                    self._cooldown_until[client_uid] = time.time() + self._cooldown_seconds
                     
             except Exception as e:
                 logger.error(f"ASR error: {e}")
@@ -375,6 +438,7 @@ class WebSocketHandler:
                     if audio_path:
                         audio_filename = os.path.basename(audio_path)
                         audio_url = f"/cache/{audio_filename}"
+                        self._play_audio_local(audio_path, websocket)
                 except Exception as e:
                     logger.error(f"TTS error: {e}")
 
@@ -424,6 +488,7 @@ class WebSocketHandler:
                                 if audio_path:
                                     audio_filename = os.path.basename(audio_path)
                                     audio_url = f"/cache/{audio_filename}"
+                                    self._play_audio_local(audio_path, websocket)
                             except Exception as e:
                                 logger.error(f"TTS error: {e}")
 

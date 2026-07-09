@@ -14,6 +14,24 @@ from llm.llm_factory import LLMFactory
 
 from loguru import logger
 
+try:
+    from skills.arm_control.skill import ArmControlSkill
+except Exception as e:
+    logger.warning(f"Failed to import ArmControlSkill: {e}")
+    ArmControlSkill = None
+
+try:
+    from skills.servo_control.skill import ServoControlSkill
+except Exception as e:
+    logger.warning(f"Failed to import ServoControlSkill: {e}")
+    ServoControlSkill = None
+
+try:
+    from skills.chassis_control.skill import ChassisControlSkill
+except Exception as e:
+    logger.warning(f"Failed to import ChassisControlSkill: {e}")
+    ChassisControlSkill = None
+
 _CHATBOT_ROOT = Path(__file__).parent
 
 
@@ -45,6 +63,9 @@ class ServiceContext:
         self.tts_engine: TTSInterface = None
         self.vad_engine: VADInterface = None
         self.llm_engine: Optional[LLMInterface] = None
+        self.arm_skill = None
+        self.servo_skill = None
+        self.chassis_skill = None
         self.system_prompt: str = ""
         self.max_history_turns: int = 8
 
@@ -76,6 +97,38 @@ class ServiceContext:
             self.max_history_turns = int(
                 config["llm_engine"].get("max_history_turns", 8)
             )
+
+        if ArmControlSkill is not None:
+            try:
+                self.arm_skill = ArmControlSkill()
+                logger.info(f"[ServiceContext] ArmControlSkill 已加载: "
+                            f"{len(self.arm_skill.actions)} 个动作")
+            except Exception as e:
+                logger.warning(f"[ServiceContext] ArmControlSkill 初始化失败: {e}")
+                self.arm_skill = None
+
+        if ServoControlSkill is not None:
+            try:
+                self.servo_skill = ServoControlSkill()
+                logger.info(f"[ServiceContext] ServoControlSkill 已加载: "
+                            f"{len(self.servo_skill.actions)} 个动作")
+                ok, msg = self.servo_skill.init_center()
+                if ok:
+                    logger.info(f"[ServiceContext] 舵机已自动回零")
+                else:
+                    logger.warning(f"[ServiceContext] 舵机回零失败: {msg}")
+            except Exception as e:
+                logger.warning(f"[ServiceContext] ServoControlSkill 初始化失败: {e}")
+                self.servo_skill = None
+
+        if ChassisControlSkill is not None:
+            try:
+                self.chassis_skill = ChassisControlSkill()
+                logger.info(f"[ServiceContext] ChassisControlSkill 已加载: "
+                            f"{len(self.chassis_skill.actions)} 个动作")
+            except Exception as e:
+                logger.warning(f"[ServiceContext] ChassisControlSkill 初始化失败: {e}")
+                self.chassis_skill = None
 
     def init_asr(self, asr_config: Dict[str, Any]) -> ASRInterface:
         """Initialize the ASR engine"""
