@@ -9,14 +9,19 @@
 新增里程计输出供导航使用。
 """
 import math
+import os
+import sys
 import time
 import logging
+
+# 确保能找到 orangepi 上的 scservo_sdk
+sys.path.insert(0, os.path.expanduser("~/ST32XX"))
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from geometry_msgs.msg import Pose, Point, Quaternion, Twist as OdometryTwist, Vector3, TransformStamped
 from tf2_ros import TransformBroadcaster
 
@@ -36,18 +41,30 @@ logger = logging.getLogger("chassis_node")
 #                       用 户 配 置 (按实际接线修改)
 # ==========================================================================
 
-DEVICE          = "/dev/ttyUSB0"   # RS-485 串口号
+DEVICE          = "/dev/ttyACM0"   # RS-485 串口号 (与头颈舵机同一总线)
 BAUDRATE        = 1000000          # 波特率 (ST3215 默认 1Mbps)
 MAX_SPEED       = 3600             # 最大速度 (0~4095)
 ACC             = 50               # 加速度
 
 # 舵机 ID 与安装角度 (与 omni_wheel.py 保持一致)
+# 前进→右移修正: 所有角度逆时针旋转 -90°
 WHEEL_MAP = {
-    3: math.radians(90),    # 正前方
-    1: math.radians(330),   # 左后方
-    2: math.radians(210),   # 右后方
+    3: math.radians(0),     # 正前方
+    1: math.radians(240),   # 左后方
+    2: math.radians(120),   # 右后方
 }
 WHEEL_IDS = [1, 2, 3]
+
+# 头颈舵机 (位置控制)
+HEAD_SERVO1_ID       = 4   # 头部左右 (pan)
+HEAD_SERVO1_CENTER   = 2459
+HEAD_SERVO1_LIMIT    = 1024
+HEAD_SERVO2_ID       = 5   # 头部俯仰 (tilt)
+HEAD_SERVO2_CENTER   = 2150
+HEAD_SERVO2_LIMIT_UP = 319
+HEAD_SERVO2_LIMIT_DOWN = 284
+HEAD_SPEED           = 2400
+HEAD_ACC             = 50
 
 L = 1.0                           # 旋转增益
 WHEEL_RADIUS    = 0.05            # 轮子半径 (米)
@@ -108,6 +125,13 @@ class ServoBus:
         else:
             self._write1(sid, 40, 1)  # TORQUE_ENABLE 地址
 
+    def set_position_mode(self, sid: int):
+        """设为位置控制模式 (MODE=0)"""
+        if self._sdk:
+            self._pkt.write1ByteTxRx(sid, 33, 0)  # MODE register -> 0
+        else:
+            self._write1(sid, 33, 0)
+
     def write_speed(self, sid: int, speed: int, acc: int):
         """写速度指令 (-4095 ~ 4095)"""
         if self._sdk:
@@ -127,6 +151,14 @@ class ServoBus:
             return pos
         else:
             return self._read2(sid, 56)  # PRESENT_POSITION
+
+    def write_position(self, sid: int, position: int, speed: int = 2400, acc: int = 50):
+        """写位置指令 (用于头颈舵机)"""
+        if self._sdk:
+            self._pkt.WritePosEx(sid, position, speed, acc)
+        else:
+            # 简化位置写入
+            self._write2(sid, 42, position & 0xFF, (position >> 8) & 0xFF)  # GOAL_POSITION
 
     # ── 底层协议辅助 ──
     def _checksum(self, buf):
@@ -233,6 +265,9 @@ class ChassisNode(Node):
         self.cmd_sub = self.create_subscription(
             Twist, "/cmd_vel", self._cmd_callback, 10
         )
+        self.head_cmd_sub = self.create_subscription(
+            String, "/head_cmd", self._head_cmd_callback, 10
+        )
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -257,18 +292,52 @@ class ChassisNode(Node):
         self.get_logger().info("底盘节点启动完成")
 
     def _init_servos(self):
-        """初始化所有舵机: 解锁 → 轮子模式 → 使能扭矩"""
+        """初始化所有舵机: 轮子=连续旋转, 头颈=位置控制, 全部使能"""
         for sid in WHEEL_IDS:
             self.bus.unlock_eprom(sid)
             self.bus.wheel_mode(sid)
             self.bus.torque_enable(sid)
-            self.get_logger().info(f"舵机 [ID:{sid}] 初始化完成")
+            self.get_logger().info(f"轮子舵机 [ID:{sid}] 初始化完成")
+
+        for sid, name in [(HEAD_SERVO1_ID, "头部左右"), (HEAD_SERVO2_ID, "头部俯仰")]:
+            self.bus.unlock_eprom(sid)
+            self.bus.set_position_mode(sid)   # 关键: 位置模式, 否则 WritePosEx 无效
+            self.bus.torque_enable(sid)
+            self.get_logger().info(f"头颈舵机 [ID:{sid}] {name} 初始化完成")
+
+    # 头颈动作映射
+    HEAD_ACTIONS = {
+        "head_left":      (HEAD_SERVO1_ID, HEAD_SERVO1_CENTER - HEAD_SERVO1_LIMIT),
+        "head_right":     (HEAD_SERVO1_ID, HEAD_SERVO1_CENTER + HEAD_SERVO1_LIMIT),
+        "head_up":        (HEAD_SERVO2_ID, HEAD_SERVO2_CENTER + HEAD_SERVO2_LIMIT_UP),
+        "head_down":      (HEAD_SERVO2_ID, HEAD_SERVO2_CENTER - HEAD_SERVO2_LIMIT_DOWN),
+        "head_center_h":  (HEAD_SERVO1_ID, HEAD_SERVO1_CENTER),
+        "head_center_v":  (HEAD_SERVO2_ID, HEAD_SERVO2_CENTER),
+        "center_all":     None,  # 特殊: 双舵机回中
+    }
 
     def _cmd_callback(self, msg: Twist):
         """接收 /cmd_vel"""
         self._current_vx = msg.linear.x
         self._current_vy = msg.linear.y
         self._current_omega = msg.angular.z
+
+    def _head_cmd_callback(self, msg: String):
+        """接收 /head_cmd"""
+        action = msg.data.strip()
+        if action not in self.HEAD_ACTIONS:
+            self.get_logger().warn(f"未知头颈动作: {action}")
+            return
+
+        if action == "center_all":
+            self.bus.write_position(HEAD_SERVO1_ID, HEAD_SERVO1_CENTER, HEAD_SPEED, HEAD_ACC)
+            time.sleep(0.05)
+            self.bus.write_position(HEAD_SERVO2_ID, HEAD_SERVO2_CENTER, HEAD_SPEED, HEAD_ACC)
+            self.get_logger().info("[头颈] 双舵机回中")
+        else:
+            sid, pos = self.HEAD_ACTIONS[action]
+            self.bus.write_position(sid, pos, HEAD_SPEED, HEAD_ACC)
+            self.get_logger().info(f"[头颈] {action}: ID={sid} -> pos={pos}")
 
     def _control_loop(self):
         """50Hz 主循环: 发送速度 + 读取编码器 + 发布里程计"""

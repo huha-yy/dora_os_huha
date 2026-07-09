@@ -1,4 +1,3 @@
-# orchestrator/adapters/ros2_adapter.py
 """ROS 2 底层控制适配器"""
 
 import logging
