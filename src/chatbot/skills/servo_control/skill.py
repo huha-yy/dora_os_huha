@@ -1,23 +1,20 @@
 """
-头颈舵机语音控制 Skill (通过 ROS2 /head_cmd 话题)
+头颈舵机语音控制 Skill (通过 robot_bus 直接发布 /head_cmd)
 - 加载 YAML 配置（关键词 → 动作映射）
-- 匹配语音文本 → 发布 /head_cmd 话题
-- 与 chassis_ros_node 共享串口, 无需直接打开 /dev/ttyACM0
+- 匹配语音文本 → robot_bus.publish_head_cmd()
+- 持久 ROS2 publisher, 无 subprocess 开销
 """
 
-import os
-import subprocess
-import shlex
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import yaml
 from loguru import logger
 
+from robot_bus import publish_head_cmd
+
 _SKILL_DIR = Path(__file__).parent
 _CONFIG_PATH = _SKILL_DIR / "config.yaml"
-
-ROS2_SETUP = "/opt/ros/humble/setup.bash"
 
 
 class ServoControlSkill:
@@ -69,8 +66,10 @@ class ServoControlSkill:
                 raise ValueError(f"[ServoSkill] 动作 '{name}' 未配置关键词")
 
     def init_center(self) -> Tuple[bool, str]:
-        """开机自动回零: 通过 /head_cmd 话题发送 center_all"""
-        return self._publish_head_cmd("center_all")
+        """开机自动回零: 通过 robot_bus 发布 /head_cmd"""
+        logger.info("[ServoSkill] 开机自动回零...")
+        publish_head_cmd("center_all")
+        return True, "舵机已回零"
 
     def match(self, text: str) -> Optional[dict]:
         for kw, action in self.keyword_map.items():
@@ -83,35 +82,5 @@ class ServoControlSkill:
         name = action.get("name", "")
         action_id = action.get("action", "")
         logger.info(f"[ServoSkill] 执行动作 '{name}': {action_id}")
-        return self._publish_head_cmd(action_id)
-
-    def _publish_head_cmd(self, action: str) -> Tuple[bool, str]:
-        """通过 ros2 topic pub 发送 /head_cmd"""
-        cmd = (
-            f"bash -c '"
-            f"source {shlex.quote(ROS2_SETUP)} && "
-            f"ros2 topic pub --once /head_cmd std_msgs/msg/String "
-            f"\"{{data: '{action}'}}\" 2>&1'"
-        )
-        logger.info(f"[ServoSkill] 发布 /head_cmd: {action}")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            output = result.stdout.strip()
-            if result.returncode == 0:
-                logger.info(f"[ServoSkill] 动作 '{action}' 已发送")
-                return True, f"已执行 {action}"
-            else:
-                logger.error(f"[ServoSkill] 发送失败 '{action}': {output}")
-                return False, f"{action} 发送失败: {output}"
-        except subprocess.TimeoutExpired:
-            return False, f"{action} 超时"
-        except Exception as e:
-            logger.error(f"[ServoSkill] 异常 '{action}': {e}")
-            return False, f"{action} 异常: {e}"
+        publish_head_cmd(action_id)
+        return True, f"已执行 {name}"

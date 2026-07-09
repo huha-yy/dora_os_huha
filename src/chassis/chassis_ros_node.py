@@ -288,6 +288,8 @@ class ChassisNode(Node):
         self._current_vx = 0.0
         self._current_vy = 0.0
         self._current_omega = 0.0
+        self._last_cmd_time = self.get_clock().now()  # 看门狗
+        self._cmd_timeout = 1.0  # 1秒无新指令则自动停
 
         self.get_logger().info("底盘节点启动完成")
 
@@ -321,6 +323,7 @@ class ChassisNode(Node):
         self._current_vx = msg.linear.x
         self._current_vy = msg.linear.y
         self._current_omega = msg.angular.z
+        self._last_cmd_time = self.get_clock().now()
 
     def _head_cmd_callback(self, msg: String):
         """接收 /head_cmd"""
@@ -347,7 +350,14 @@ class ChassisNode(Node):
             dt = 0.02
         self._last_time = now
 
-        # ── 1. 发送速度到舵机 ──
+        # ── 1. 看门狗: 超时自动停 ──
+        dt_cmd = (now - self._last_cmd_time).nanoseconds / 1e9
+        if dt_cmd > self._cmd_timeout:
+            self._current_vx = 0.0
+            self._current_vy = 0.0
+            self._current_omega = 0.0
+
+        # ── 2. 发送速度到舵机 ──
         vx = self._current_vx
         vy = self._current_vy
         omega = self._current_omega

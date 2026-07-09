@@ -392,6 +392,13 @@ class WebSocketHandler:
                 
                 if text and text.strip():
                     user_text = text.strip()
+
+                    # ── 唤醒词检查 ──
+                    # 必须以"小戴"开头才响应，保留完整原话不做截断
+                    if not (user_text.startswith("小戴小戴") or user_text.startswith("小戴")):
+                        logger.info(f"未检测到唤醒词, 忽略: {user_text}")
+                        return  # 静默，不回复不动
+
                     await websocket.send_json({
                         "type": "user-transcription",
                         "text": user_text,
