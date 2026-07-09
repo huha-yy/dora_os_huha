@@ -64,3 +64,9 @@ cache/
 *.onnx
 *.pt
 *.rknn
+
+# Zip archives
+*.zip
+
+# Perception models (gitignored per README)
+src/perception/models/

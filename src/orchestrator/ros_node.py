@@ -15,6 +15,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
 
 # Configure logging format to include line numbers for ROS2 loggers
 logging.basicConfig(
@@ -89,6 +90,11 @@ class DorabotOrchestratorNode(Node):
         self.action_registry = ActionExecutorRegistry(self.scheduler)
         register_executors(self.action_registry, self)
         self.ai_agent_url = AI_AGENT_URL
+
+        # /cmd_vel publisher for emergency stop and motion control
+        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        from orchestrator.adapters.ros2_adapter import set_cmd_vel_publisher
+        set_cmd_vel_publisher(self.cmd_vel_pub)
 
     def _annotated_callback(self, msg: Image) -> None:
         """Encode the latest annotated frame as JPEG for the web MJPEG stream."""
