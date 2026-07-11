@@ -1,8 +1,30 @@
 from .config import Gates
 from .types import GateResult
 
+# Note: gates.min_confidence is NOT a hard gate here. Confidence is a separate
+# graded score applied by the pulse estimator, not a binary quality check.
+
 
 def evaluate_gates(components: dict, gates: Gates) -> GateResult:
+    """Evaluate camera quality gates against component readings.
+
+    This function enforces a fail-safe contract: the check order is intentionally
+    stable, and the first failing gate's reason is returned. This means that a
+    regression in check order would be immediately visible in test failures.
+
+    Each component key uses a deliberately chosen default on the "reject" side
+    (False for booleans, 1e9 for distances/times) so that an omitted key causes
+    the reading to be withheld, never accepted. This is critical since the
+    perception node builds the components dict by hand.
+
+    Args:
+        components: Dict of component readings (face_present, motion, etc).
+        gates: Configuration thresholds (min_fps, max_motion, etc).
+
+    Returns:
+        GateResult with ok=True/False, reason (first failure or None), and
+        a copy of the input components dict for debugging.
+    """
     c = components
     checks = [
         (not c.get("face_present", False), "no_face"),
