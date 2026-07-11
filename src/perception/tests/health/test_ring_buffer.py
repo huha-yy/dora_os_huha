@@ -32,4 +32,32 @@ def test_effective_fps_zero_with_insufficient_samples():
 def test_max_seconds_evicts_old_samples():
     buf = RgbRingBuffer(max_seconds=2.0)
     _fill(buf, start=0.0, n=100, dt=0.1)  # spans 10s but keeps ~2s
-    assert len(buf) <= 25
+    # Exact expected count is 21; allow a small tolerance for float-edge
+    # brittleness on the 0.1-spaced timestamps.
+    assert 20 <= len(buf) <= 22
+
+
+def test_empty_buffer_defaults():
+    buf = RgbRingBuffer(max_seconds=10.0)
+    assert buf.window(now=0.0, seconds=5.0) == []
+    assert buf.effective_fps(now=0.0, seconds=5.0) == 0.0
+    assert len(buf) == 0
+
+
+def test_duplicate_timestamps_do_not_divide_by_zero():
+    buf = RgbRingBuffer(max_seconds=10.0)
+    buf.append(RgbSample(t=1.0, r=1, g=1, b=1))
+    buf.append(RgbSample(t=1.0, r=1, g=1, b=1))  # not strictly greater, dropped
+    assert len(buf) == 1
+    assert buf.effective_fps(now=1.0, seconds=2.0) == 0.0
+
+
+def test_out_of_order_sample_is_dropped():
+    buf = RgbRingBuffer(max_seconds=10.0)
+    buf.append(RgbSample(t=5.0, r=1, g=1, b=1))
+    buf.append(RgbSample(t=3.0, r=1, g=1, b=1))  # stale, arrives after t=5
+    buf.append(RgbSample(t=6.0, r=1, g=1, b=1))  # in order, kept
+    assert len(buf) == 2
+    win = buf.window(now=6.0, seconds=10.0)
+    assert [s.t for s in win] == [5.0, 6.0]
+    assert win == sorted(win, key=lambda s: s.t)
