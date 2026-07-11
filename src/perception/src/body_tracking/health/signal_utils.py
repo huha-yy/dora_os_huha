@@ -3,6 +3,13 @@ from typing import Optional, Tuple
 import numpy as np
 from scipy import signal as sp_signal
 
+# Half-width (Hz) of the neighbourhood around the spectral peak used to
+# compute peak_dominance. Chosen to be invariant to zero-padding: widening
+# the FFT (n_fft) redistributes a sinusoid's energy across more, narrower
+# bins, but the total power within a fixed +/-Hz window around the peak
+# frequency stays stable.
+PEAK_NEIGHBOURHOOD_HZ = 0.2
+
 
 def resample_uniform(ts: np.ndarray, values: np.ndarray, fps: float) -> np.ndarray:
     ts = np.asarray(ts, dtype=float)
@@ -50,9 +57,19 @@ def hr_from_signal(
     band_freqs = freqs[band]
     peak_idx = int(np.argmax(band_power))
     peak_power = float(band_power[peak_idx])
+    peak_freq = float(band_freqs[peak_idx])
     total = float(band_power.sum())
     median = float(np.median(band_power)) or 1e-12
     hr_bpm = float(band_freqs[peak_idx] * 60.0)
-    dominance = peak_power / total if total > 0 else 0.0
+    # peak_dominance = fraction of in-band power concentrated in a narrow
+    # neighbourhood around the peak frequency. Unlike peak_power / total
+    # (a single FFT bin vs. the whole band), this is invariant to the
+    # zero-padding factor used above: a clean sinusoid's energy spreads
+    # across more bins as n_fft grows, but the power within a fixed
+    # +/-PEAK_NEIGHBOURHOOD_HZ window around the peak stays essentially
+    # constant.
+    neighbourhood = np.abs(band_freqs - peak_freq) <= PEAK_NEIGHBOURHOOD_HZ
+    neighbourhood_power = float(band_power[neighbourhood].sum())
+    dominance = neighbourhood_power / total if total > 0 else 0.0
     snr = peak_power / median
     return hr_bpm, snr, dominance

@@ -328,7 +328,7 @@ git commit -m "feat: add timestamped RGB ring buffer for rPPG"
 - Produces:
   `resample_uniform(ts: np.ndarray, values: np.ndarray, fps: float) -> np.ndarray` (linear interp onto uniform grid at `fps` spanning ts range);
   `bandpass(sig: np.ndarray, fps: float, lo_hz: float = 0.7, hi_hz: float = 4.0) -> np.ndarray` (zero-phase Butterworth; returns detrended input if too short);
-  `hr_from_signal(sig: np.ndarray, fps: float, lo_hz: float = 0.7, hi_hz: float = 4.0) -> tuple[float | None, float, float]` returning `(hr_bpm, spectral_snr, peak_dominance)`. `hr_bpm` is `None` if `sig` shorter than `int(fps * 2)` samples. `peak_dominance` is peak-power / total-in-band-power in `[0,1]`; `spectral_snr` is peak-power / median-in-band-power.
+  `hr_from_signal(sig: np.ndarray, fps: float, lo_hz: float = 0.7, hi_hz: float = 4.0) -> tuple[float | None, float, float]` returning `(hr_bpm, spectral_snr, peak_dominance)`. `hr_bpm` is `None` if `sig` shorter than `int(fps * 2)` samples. `peak_dominance` is the fraction of in-band power concentrated within `PEAK_NEIGHBOURHOOD_HZ` (0.2 Hz) of the peak frequency, over total-in-band-power, in `[0,1]` — i.e. `sum(band_power[|band_freqs - peak_freq| <= 0.2]) / sum(band_power)`. This neighbourhood-sum form is invariant to the FFT zero-padding factor, unlike a naive single-bin `peak_power / total` ratio (which is not: it shrinks as `n_fft` grows because a pure tone's energy is spread across more, narrower bins). `spectral_snr` is peak-power (single bin) / median-in-band-power.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -373,6 +373,20 @@ def test_hr_from_signal_none_when_too_short():
     sig = np.sin(np.arange(0, 1.0, 1 / fps))  # 1s < 2s minimum
     hr, snr, dominance = hr_from_signal(sig, fps)
     assert hr is None
+
+
+def test_peak_dominance_discriminates_noise_from_clean_tone():
+    fps = 30.0
+    t = np.arange(0, 15, 1 / fps)
+    clean_sig = np.sin(2 * np.pi * 1.2 * t)  # exactly 72 bpm, noiseless
+    _, _, clean_dominance = hr_from_signal(clean_sig, fps)
+
+    rng = np.random.RandomState(0)
+    noise_sig = rng.randn(t.size)  # pure broadband noise, no dominant tone
+    _, _, noise_dominance = hr_from_signal(noise_sig, fps)
+
+    assert noise_dominance < 0.5
+    assert noise_dominance < clean_dominance
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -389,6 +403,13 @@ from typing import Optional, Tuple
 
 import numpy as np
 from scipy import signal as sp_signal
+
+# Half-width (Hz) of the neighbourhood around the spectral peak used to
+# compute peak_dominance. Chosen to be invariant to zero-padding: widening
+# the FFT (n_fft) redistributes a sinusoid's energy across more, narrower
+# bins, but the total power within a fixed +/-Hz window around the peak
+# frequency stays stable.
+PEAK_NEIGHBOURHOOD_HZ = 0.2
 
 
 def resample_uniform(ts: np.ndarray, values: np.ndarray, fps: float) -> np.ndarray:
@@ -414,7 +435,9 @@ def bandpass(sig: np.ndarray, fps: float, lo_hz: float = 0.7, hi_hz: float = 4.0
     lo = max(lo_hz / nyq, 1e-3)
     hi = min(hi_hz / nyq, 0.99)
     b, a = sp_signal.butter(3, [lo, hi], btype="band")
-    return sp_signal.filtfilt(b, a, sig)
+    filtered = sp_signal.filtfilt(b, a, sig)
+    # Remove residual mean from filtfilt edge effects to ensure DC removal
+    return filtered - filtered.mean()
 
 
 def hr_from_signal(
@@ -435,10 +458,16 @@ def hr_from_signal(
     band_freqs = freqs[band]
     peak_idx = int(np.argmax(band_power))
     peak_power = float(band_power[peak_idx])
+    peak_freq = float(band_freqs[peak_idx])
     total = float(band_power.sum())
     median = float(np.median(band_power)) or 1e-12
     hr_bpm = float(band_freqs[peak_idx] * 60.0)
-    dominance = peak_power / total if total > 0 else 0.0
+    # peak_dominance = fraction of in-band power concentrated in a narrow
+    # neighbourhood around the peak frequency (invariant to zero-padding),
+    # NOT a single-bin peak_power / total ratio (which shrinks as n_fft grows).
+    neighbourhood = np.abs(band_freqs - peak_freq) <= PEAK_NEIGHBOURHOOD_HZ
+    neighbourhood_power = float(band_power[neighbourhood].sum())
+    dominance = neighbourhood_power / total if total > 0 else 0.0
     snr = peak_power / median
     return hr_bpm, snr, dominance
 ```
@@ -446,7 +475,7 @@ def hr_from_signal(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd src/perception && python -m pytest tests/health/test_signal_utils.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Commit**
 

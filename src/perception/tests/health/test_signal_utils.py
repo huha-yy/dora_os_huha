@@ -36,3 +36,17 @@ def test_hr_from_signal_none_when_too_short():
     sig = np.sin(np.arange(0, 1.0, 1 / fps))  # 1s < 2s minimum
     hr, snr, dominance = hr_from_signal(sig, fps)
     assert hr is None
+
+
+def test_peak_dominance_discriminates_noise_from_clean_tone():
+    fps = 30.0
+    t = np.arange(0, 15, 1 / fps)
+    clean_sig = np.sin(2 * np.pi * 1.2 * t)  # exactly 72 bpm, noiseless
+    _, _, clean_dominance = hr_from_signal(clean_sig, fps)
+
+    rng = np.random.RandomState(0)
+    noise_sig = rng.randn(t.size)  # pure broadband noise, no dominant tone
+    _, _, noise_dominance = hr_from_signal(noise_sig, fps)
+
+    assert noise_dominance < 0.5
+    assert noise_dominance < clean_dominance
