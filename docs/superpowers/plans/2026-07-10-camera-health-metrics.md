@@ -19,6 +19,15 @@
 - Bilingual UI copy (zh + en), matching existing `index.html`.
 - Follow existing repo import style: within `body_tracking`, use relative imports (`from .health.x import Y`).
 - Commit after each task with conventional-commit messages (`feat:`, `test:`, `chore:`).
+- **Canonical test command** (use this everywhere a task says "run pytest"):
+  ```bash
+  cd src/perception && PYTHONPATH= /extra_space/dorabot_ws/.venv/bin/python -m pytest tests/health -v
+  ```
+  `PYTHONPATH=` is required: the shell profile puts `/opt/ros/humble` on `PYTHONPATH`, whose
+  `launch_testing` pytest plugins fail to load (missing `lark`) and abort collection. Clearing it
+  also enforces the "health core imports no ROS" constraint above. Test deps live in the repo venv
+  (`/extra_space/dorabot_ws/.venv`); install with `uv pip install --python /extra_space/dorabot_ws/.venv/bin/python <pkg>`.
+  The orchestrator tests (Task 14) DO need ROS-free FastAPI only, so the same command shape applies there.
 
 ## File Structure
 

@@ -64,3 +64,6 @@ cache/
 *.onnx
 *.pt
 *.rknn
+
+# Superpowers subagent-driven-development scratch
+.superpowers/
