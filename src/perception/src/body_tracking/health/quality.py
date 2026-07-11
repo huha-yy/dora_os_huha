@@ -1,0 +1,23 @@
+from .config import Gates
+from .types import GateResult
+
+
+def evaluate_gates(components: dict, gates: Gates) -> GateResult:
+    c = components
+    checks = [
+        (not c.get("face_present", False), "no_face"),
+        (not c.get("single_target", False), "multiple_targets"),
+        (not c.get("roi_in_bounds", False), "roi_out_of_bounds"),
+        (c.get("face_px", 0) < gates.min_face_px, "face_too_small"),
+        (c.get("roi_px", 0) < gates.min_roi_px, "roi_too_small"),
+        (c.get("effective_fps", 0.0) < gates.min_fps, "low_fps"),
+        (c.get("drop_ratio", 1.0) > gates.max_drop_ratio, "dropped_frames"),
+        (c.get("jitter_ms", 1e9) > gates.max_jitter_ms, "timestamp_jitter"),
+        (c.get("motion", 1e9) > gates.max_motion, "head_motion"),
+        (c.get("illum_delta", 1e9) > gates.max_illum_delta, "illumination_change"),
+        (not c.get("exposure_stable", False), "exposure_unstable"),
+    ]
+    for failed, reason in checks:
+        if failed:
+            return GateResult(ok=False, reason=reason, components=dict(c))
+    return GateResult(ok=True, reason=None, components=dict(c))
