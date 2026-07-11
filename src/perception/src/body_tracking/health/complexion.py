@@ -17,8 +17,19 @@ def describe_complexion(mean_rgb: tuple[float, float, float]) -> dict[str, str]:
         - appearance_zh: Chinese appearance label
         - appearance_en: English appearance label
         - caveat: Non-medical disclaimer in bilingual text
+
+    Raises:
+        ValueError: If any channel is NaN or outside 0..255 range
     """
     r, g, b = (float(mean_rgb[0]), float(mean_rgb[1]), float(mean_rgb[2]))
+
+    # Validate input ranges
+    for channel_val in (r, g, b):
+        if channel_val != channel_val:  # NaN check (NaN != NaN is True)
+            raise ValueError(f"Channel value is NaN")
+        if not (0 <= channel_val <= 255):
+            raise ValueError(f"Channel value {channel_val} outside valid range 0..255")
+
     brightness = (r + g + b) / 3.0
     ruddiness = r - g
 
