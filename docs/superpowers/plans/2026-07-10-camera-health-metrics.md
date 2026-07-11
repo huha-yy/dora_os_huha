@@ -1074,12 +1074,12 @@ git commit -m "feat: add face ROI geometry and mean-RGB sampling"
 
 **Interfaces:**
 - Consumes: `ScanState` (Task 1).
-- Produces: `ScanController(target_clean_s: float, timeout_s: float, warmup_s: float = 2.0)` with:
+- Produces: `ScanController(target_clean_s: float, timeout_s: float, warmup_s: float = 2.0, max_dt_s: float = 2.0)` with:
   `start(measurement_id: str, now: float) -> None`,
   `cancel(now: float) -> None`,
-  `update(now: float, gate_ok: bool) -> None` (accumulates clean seconds only while gate_ok; enters `INSUFFICIENT_QUALITY` if no clean second accepted within `warmup_s` grace after start and not yet collecting; `COMPLETE` when clean seconds ≥ target; `FAILED` on timeout),
+  `update(now: float, gate_ok: bool) -> None` (accumulates clean seconds only while gate_ok; enters `INSUFFICIENT_QUALITY` if no clean second accepted within `warmup_s` grace after start and not yet collecting; `COMPLETE` when clean seconds ≥ target; `FAILED` on timeout — timeout takes precedence over completion when both are satisfied in the same call),
   properties `state: ScanState`, `progress_clean_s: float`, `measurement_id: str | None`.
-  Clean-second accrual uses the delta between consecutive `update` calls while `gate_ok` is True.
+  Clean-second accrual uses the delta between consecutive `update` calls while `gate_ok` is True, **capped at `max_dt_s` per call** (default 2.0s, matched to the ~1 Hz driving timer) so a long gap between calls (stall, node hang, camera dropout) can credit at most one update's worth of clean time rather than the full elapsed wall-clock gap. A backwards `now` (i.e. earlier than the timestamp of the previous call — clock skew or a stale/replayed timestamp) is **ignored entirely**: it neither accrues progress nor rewinds the internal time baseline, so it cannot cause a later, normal call to over-credit. Recovering from `INSUFFICIENT_QUALITY` back to `COLLECTING` resumes accrual from the previously accumulated `progress_clean_s` (not a reset). Calling `start()` while a scan is already running is an explicit restart: it discards in-flight progress, resets `progress_clean_s` to 0.0, and adopts the new `measurement_id`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1141,10 +1141,17 @@ from .types import ScanState
 
 
 class ScanController:
-    def __init__(self, target_clean_s: float, timeout_s: float, warmup_s: float = 2.0) -> None:
+    def __init__(
+        self,
+        target_clean_s: float,
+        timeout_s: float,
+        warmup_s: float = 2.0,
+        max_dt_s: float = 2.0,
+    ) -> None:
         self._target = float(target_clean_s)
         self._timeout = float(timeout_s)
         self._warmup = float(warmup_s)
+        self._max_dt = float(max_dt_s)
         self._state = ScanState.IDLE
         self._clean = 0.0
         self._mid: Optional[str] = None
@@ -1177,7 +1184,13 @@ class ScanController:
     def update(self, now: float, gate_ok: bool) -> None:
         if self._state not in (ScanState.WARMING, ScanState.COLLECTING, ScanState.INSUFFICIENT_QUALITY):
             return
-        dt = max(0.0, now - self._last_t)
+
+        if now < self._last_t:
+            # Stale/out-of-order timestamp (clock skew, replay, etc.). Ignore
+            # entirely: do not accrue and do not rewind the time baseline.
+            return
+
+        dt = min(now - self._last_t, self._max_dt)
         self._last_t = now
 
         if now - self._start_t > self._timeout:
@@ -1198,10 +1211,23 @@ class ScanController:
             self._state = ScanState.INSUFFICIENT_QUALITY
 ```
 
+> **Revised per code review (2026-07-11):** the initial implementation left `dt`
+> uncapped (a single `update()` call after a long gap could credit the whole
+> gap and instantly complete the scan) and rewound `_last_t` even on a
+> backwards `now` (corrupting the baseline for the next call). Both are fixed
+> above: `dt` is clamped to `max_dt_s`, and a backwards `now` is ignored
+> before any mutation. See `test_large_gap_credits_at_most_max_dt_s`,
+> `test_custom_max_dt_s_is_respected`,
+> `test_backwards_now_is_ignored_and_does_not_corrupt_baseline`,
+> `test_recovery_from_insufficient_quality_resumes_prior_progress`,
+> `test_timeout_wins_over_completion_in_same_update`, and
+> `test_restart_while_running_resets_progress_and_adopts_new_id` in
+> `test_scan.py`.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd src/perception && python -m pytest tests/health/test_scan.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (10 passed)
 
 - [ ] **Step 5: Commit**
 
