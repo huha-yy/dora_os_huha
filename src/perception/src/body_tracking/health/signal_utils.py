@@ -10,6 +10,13 @@ from scipy import signal as sp_signal
 # frequency stays stable.
 PEAK_NEIGHBOURHOOD_HZ = 0.2
 
+# Minimum sample count for a stable filtfilt band-pass. scipy.signal.filtfilt
+# requires the signal length to exceed its default padlen (roughly
+# 3 * max(len(a), len(b)), which is 21 samples for our order-3 Butterworth
+# band filter); this threshold adds a small margin above that minimum.
+# Below this we skip filtering and just return the detrended signal.
+MIN_SAMPLES_FOR_FILTFILT = 27
+
 
 def resample_uniform(ts: np.ndarray, values: np.ndarray, fps: float) -> np.ndarray:
     ts = np.asarray(ts, dtype=float)
@@ -29,7 +36,7 @@ def bandpass(sig: np.ndarray, fps: float, lo_hz: float = 0.7, hi_hz: float = 4.0
     sig = sig - sig.mean()
     nyq = fps / 2.0
     # Need enough samples for filtfilt padding; else just return detrended.
-    if sig.size < 27 or hi_hz >= nyq:
+    if sig.size < MIN_SAMPLES_FOR_FILTFILT or hi_hz >= nyq:
         return sig
     lo = max(lo_hz / nyq, 1e-3)
     hi = min(hi_hz / nyq, 0.99)
