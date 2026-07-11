@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -10,7 +10,9 @@ class FaceRoi:
     face_px: int
 
 
-def _clip_patch(x, y, w, h, frame_w, frame_h):
+def _clip_patch(
+    x: float, y: float, w: float, h: float, frame_w: int, frame_h: int
+) -> Tuple[int, int, int, int]:
     x = int(max(0, min(x, frame_w - 1)))
     y = int(max(0, min(y, frame_h - 1)))
     w = int(max(0, min(w, frame_w - x)))
@@ -18,7 +20,13 @@ def _clip_patch(x, y, w, h, frame_w, frame_h):
     return (x, y, w, h)
 
 
-def roi_from_pose(nose_xy, left_eye_xy, right_eye_xy, frame_w, frame_h) -> Optional[FaceRoi]:
+def roi_from_pose(
+    nose_xy: Tuple[float, float],
+    left_eye_xy: Tuple[float, float],
+    right_eye_xy: Tuple[float, float],
+    frame_w: int,
+    frame_h: int,
+) -> Optional[FaceRoi]:
     (nx, ny) = nose_xy
     (lx, ly) = left_eye_xy
     (rx, ry) = right_eye_xy
@@ -40,23 +48,44 @@ def roi_from_pose(nose_xy, left_eye_xy, right_eye_xy, frame_w, frame_h) -> Optio
     return FaceRoi(patches=patches, face_px=face_px)
 
 
-def sample_mean_rgb(frame_bgr: np.ndarray, roi: FaceRoi) -> Tuple[float, float, float]:
+def _iter_valid_patches(
+    patches: List[Tuple[int, int, int, int]], frame_w: int, frame_h: int
+) -> Iterator[Tuple[int, int, int, int]]:
+    """Yield only patches that are fully in-bounds and non-degenerate.
+
+    This is the single source of truth for patch validity, shared by
+    `sample_mean_rgb` and `roi_pixel_count`, so the reported pixel count and
+    the pixels actually sampled can never disagree. A patch is rejected (not
+    clipped) if it has a negative origin, non-positive size, or extends past
+    the frame edges -- negative indices must never reach a numpy slice here,
+    since `frame[y:y+h, x:x+w]` silently wraps around for negative `x`/`y`
+    instead of raising, which would otherwise sample pixels from the opposite
+    edge of the frame.
+    """
+    for (x, y, w, h) in patches:
+        if x < 0 or y < 0 or w <= 0 or h <= 0:
+            continue
+        if x + w > frame_w or y + h > frame_h:
+            continue
+        yield (x, y, w, h)
+
+
+def sample_mean_rgb(frame_bgr: np.ndarray, roi: FaceRoi) -> Optional[Tuple[float, float, float]]:
     b_vals, g_vals, r_vals = [], [], []
     h_frame, w_frame = frame_bgr.shape[:2]
-    for (x, y, w, h) in roi.patches:
-        if w <= 0 or h <= 0 or x + w > w_frame or y + h > h_frame:
-            continue
+    for (x, y, w, h) in _iter_valid_patches(roi.patches, w_frame, h_frame):
         crop = frame_bgr[y:y + h, x:x + w].reshape(-1, 3).astype(float)
         b_vals.append(crop[:, 0])
         g_vals.append(crop[:, 1])
         r_vals.append(crop[:, 2])
     if not r_vals:
-        return (0.0, 0.0, 0.0)
+        return None
     r = float(np.concatenate(r_vals).mean())
     g = float(np.concatenate(g_vals).mean())
     b = float(np.concatenate(b_vals).mean())
     return (r, g, b)
 
 
-def roi_pixel_count(roi: FaceRoi) -> int:
-    return int(sum(w * h for (_, _, w, h) in roi.patches))
+def roi_pixel_count(frame_bgr: np.ndarray, roi: FaceRoi) -> int:
+    h_frame, w_frame = frame_bgr.shape[:2]
+    return int(sum(w * h for (_, _, w, h) in _iter_valid_patches(roi.patches, w_frame, h_frame)))

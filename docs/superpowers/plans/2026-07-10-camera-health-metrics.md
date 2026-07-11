@@ -938,7 +938,7 @@ git commit -m "feat: add appearance-only complexion (mian se) reading"
 - Produces:
   `FaceRoi(patches: list[tuple[int,int,int,int]], face_px: int)` (patches are `(x, y, w, h)` in full-frame pixels);
   `roi_from_pose(nose_xy: tuple[float,float], left_eye_xy, right_eye_xy, frame_w: int, frame_h: int) -> FaceRoi | None` (builds forehead + two cheek patches from eye spacing; None if degenerate/out of bounds);
-  `sample_mean_rgb(frame_bgr: np.ndarray, roi: FaceRoi) -> tuple[float,float,float]` returns R,G,B means (0..255) across all in-bounds patch pixels; `roi_pixel_count(roi) -> int`.
+  `sample_mean_rgb(frame_bgr: np.ndarray, roi: FaceRoi) -> tuple[float,float,float] | None` returns R,G,B means (0..255) across all in-bounds patch pixels, or `None` if no patch has valid (non-negative-origin, in-bounds) pixels -- `None` is an explicit failure sentinel, distinct from a legitimately dark all-zero sample; `roi_pixel_count(frame_bgr: np.ndarray, roi: FaceRoi) -> int` counts pixels from the same validated patches as `sample_mean_rgb` (shared in-bounds filter), so the count and the sample never disagree. A patch is valid only if `x >= 0`, `y >= 0`, `w > 0`, `h > 0`, and it does not extend past the frame edges -- negative-origin patches are rejected outright rather than clipped, since a numpy slice with a negative start index silently wraps to the opposite edge of the frame instead of raising.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1641,8 +1641,13 @@ Then add these methods to the class:
             self._health_last_roi = None
             return
         self._health_last_roi = roi
-        r, g, b = sample_mean_rgb(frame, roi)
-        self._health_last_mean = (r, g, b, roi.face_px, roi_pixel_count(roi))
+        sample = sample_mean_rgb(frame, roi)
+        if sample is None:
+            # No patch had valid (in-bounds) pixels this frame -- do not
+            # fabricate a sample or append anything to the pulse buffer.
+            return
+        r, g, b = sample
+        self._health_last_mean = (r, g, b, roi.face_px, roi_pixel_count(frame, roi))
         self._rppg.add_sample(RgbSample(t=t_sec, r=r, g=g, b=b))
 
     def _on_scan_cmd(self, msg: String) -> None:
