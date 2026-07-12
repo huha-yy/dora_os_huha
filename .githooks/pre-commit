@@ -185,24 +185,31 @@ case "$VERDICT" in
     # No explicit VERDICT line — infer from severity keywords.
     LAST_BLOCK="$(tail -n 80 "$REVIEW_OUTPUT")"
 
-    if echo "$LAST_BLOCK" | grep -qiE '\[P[01]\]|severity:[[:space:]]*(blocker|major|critical|high)|^[[:space:]]*[-*][[:space:]]*(blocker|major):|must[[:space:]]+fix'; then
+    # The prompt asks for findings as "severity, file:line", so severities arrive in
+    # COMMA form. Match comma and colon both -- a `- major, foo.py:12` finding must
+    # not slip past this check and then get waved through by the clean-prose rule.
+    SEVERITY_BULLET='^[[:space:]]*[-*][[:space:]]*(blocker|major|critical|high|minor|nit|low|medium)[,:[:space:]]'
+    HIGH_SEVERITY='\[P[01]\]|severity:[[:space:]]*(blocker|major|critical|high)|^[[:space:]]*[-*][[:space:]]*(blocker|major|critical|high)[,:[:space:]]|must[[:space:]]+fix'
+
+    if echo "$LAST_BLOCK" | grep -qiE "$HIGH_SEVERITY"; then
       echo "[pre-commit] High-severity findings — inferring BLOCKER. Commit aborted."
       echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
       exit 1
     fi
 
-    # Clean-review prose. Safe to match loosely: the high-severity check above has
-    # already run, so a review that both praises and blocks is caught there first.
-    # The qualified form ("No correctness, safety, or scope issues were found") is
-    # what Codex actually emits -- the older `no (issues|...)` pattern required the
-    # words to be adjacent and failed closed on a passing review.
-    if echo "$LAST_BLOCK" | grep -qiE \
+    # Clean-review prose -- but ONLY when the reviewer listed no findings at all.
+    # A reviewer that files a finding and then closes with "No other issues were
+    # found" must not be read as an approval; fall through to the severity rules.
+    if echo "$LAST_BLOCK" | grep -qiE "$SEVERITY_BULLET|\[P[0-4]\]"; then
+      echo "[pre-commit] Reviewer listed findings — not inferring APPROVED from prose."
+    elif echo "$LAST_BLOCK" | grep -qiE \
         'no[^.]*(issues|concerns|problems|findings)[^.]*(found|identified|detected)|no (issues|concerns|problems|findings)|found no[^.]*(issues|concerns|problems)|nothing of concern|did not find any|looks good|all clear'; then
       echo "[pre-commit] Reviewer prose indicates a clean review. Inferring APPROVED."
       exit 0
     fi
 
-    if echo "$LAST_BLOCK" | grep -qiE '\[P[2-4]\]|severity:[[:space:]]*(minor|nit|low|medium)|^[[:space:]]*[-*][[:space:]]*(minor|nit):'; then
+    # Comma form here too -- the prompt asks for "severity, file:line".
+    if echo "$LAST_BLOCK" | grep -qiE '\[P[2-4]\]|severity:[[:space:]]*(minor|nit|low|medium)|^[[:space:]]*[-*][[:space:]]*(minor|nit|low|medium)[,:[:space:]]'; then
       echo "[pre-commit] Low-severity findings only — inferring ADVISORY. Proceeding."
       exit 0
     fi
