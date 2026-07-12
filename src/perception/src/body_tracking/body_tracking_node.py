@@ -13,10 +13,17 @@ import click
 import numpy as np
 from tqdm import tqdm
 from .body_detector import BodyDetector
+from .health import (
+    RPPGEstimator, ScanController, HealthConfig, RgbSample, build_metrics,
+    describe_complexion, evaluate_gates,
+)
+from .health.roi_detector import FaceRoiExtractor
+from .health.roi import sample_mean_rgb, roi_pixel_count
 from .state import FrameTrackingResult, RawPose, HumanStatus
 from collections import deque
 import logging
 import json
+import uuid
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -111,6 +118,26 @@ class BodyTrackingNode(Node):
         self.last_human_status = HumanStatus.create_dummy()
         self.node_up_time = datetime.now().timestamp()
         self.mock_fall_detection = mock_fall_detection
+        # --- Health metrics (rPPG) ---
+        self.health_config = HealthConfig.default()
+        self._health_last_roi = None
+        self._health_last_mean = None
+        self._health_roi_age = 999
+        self._health_last_frame_t = 0.0
+        if self.health_config.enabled:
+            self._roi_extractor = FaceRoiExtractor()
+            self._rppg = RPPGEstimator(self.health_config)
+            self._scan = ScanController(
+                target_clean_s=self.health_config.scan_window_s,
+                timeout_s=self.health_config.scan_timeout_s,
+            )
+            self.health_pub = self.create_publisher(String, "/health/metrics", 10)
+            self.scan_cmd_sub = self.create_subscription(
+                String, "/health/scan_cmd", self._on_scan_cmd, 10
+            )
+            self.create_timer(1.0, self._on_health_timer)
+            self.get_logger().info("Health metrics (rPPG) enabled")
+
         self.get_logger().info(
             "BodyTrackingNode started (process_every_n=%d), waiting for images..."
             % self.process_every_n
@@ -330,10 +357,107 @@ class BodyTrackingNode(Node):
         except Exception as exc:  # pragma: no cover - defensive
             self.get_logger().warn(f"Failed to publish annotated frame: {exc}")
 
+    def _update_health_roi(self, frame: np.ndarray) -> None:
+        roi = self._roi_extractor.update(frame)
+        if roi is None:
+            self._health_last_roi = None
+            return
+        self._health_last_roi = roi
+        self._health_roi_age = 0
+
+    def _sample_health_roi(self, frame: np.ndarray, t_sec: float) -> None:
+        self._health_roi_age += 1
+        if self._health_roi_age > self.process_every_n * 5:
+            self._health_last_roi = None
+        roi = self._health_last_roi
+        if roi is None:
+            self._health_last_mean = None
+            return
+        sample = sample_mean_rgb(frame, roi)
+        if sample is None:
+            self._health_last_mean = None
+            return
+        r, g, b = sample
+        self._health_last_mean = (r, g, b, roi.face_px, roi_pixel_count(frame, roi))
+        self._rppg.add_sample(RgbSample(t=t_sec, r=r, g=g, b=b))
+
+    def _on_scan_cmd(self, msg: String) -> None:
+        try:
+            cmd = json.loads(msg.data or "{}")
+        except (ValueError, TypeError):
+            return
+        if not isinstance(cmd, dict):
+            return
+        now = self.get_clock().now().nanoseconds / 1e9
+        action = cmd.get("action")
+        if action == "start":
+            mid = cmd.get("measurement_id") or str(uuid.uuid4())
+            self._scan.start(mid, now)
+        elif action == "cancel":
+            self._scan.cancel(now)
+
+    def _on_health_timer(self) -> None:
+        ros_now = self.get_clock().now().nanoseconds / 1e9
+
+        have_face = self._health_last_roi is not None and self._health_last_mean is not None
+
+        frame_age = ros_now - self._health_last_frame_t if self._health_last_frame_t > 0 else 99.0
+        stale = frame_age > 5.0
+
+        window_s = self.health_config.ambient_window_s
+        if stale:
+            fps = 0.0
+            est = None
+            have_face = False
+        else:
+            fps = self._rppg.effective_fps(self._health_last_frame_t, window_s)
+            est = self._rppg.estimate(self._health_last_frame_t, window_s)
+
+        face_px = self._health_last_mean[3] if have_face else 0
+        roi_px = self._health_last_mean[4] if have_face else 0
+        components = {
+            "face_present": have_face,
+            "single_target": have_face,
+            "roi_in_bounds": have_face,
+            "face_px": face_px,
+            "roi_px": roi_px,
+            "effective_fps": fps,
+        }
+        gate = evaluate_gates(components, self.health_config.gates)
+
+        show_est = est if (gate.ok and est is not None) else None
+        self._scan.update(ros_now, gate.ok and est is not None and est.hr_bpm is not None)
+
+        _all_scan_states = {"warming", "collecting", "insufficient_quality", "complete", "failed", "cancelled"}
+        mode = (
+            "scan"
+            if self._scan.measurement_id is not None
+            and self._scan.state.value in _all_scan_states
+            else "ambient"
+        )
+
+        complexion = None
+        if self.health_config.complexion_enabled and have_face:
+            complexion = describe_complexion(self._health_last_mean[:3])
+
+        msg = String()
+        msg.data = json.dumps(build_metrics(
+            ts=ros_now, mode=mode, state=self._scan.state, effective_fps=fps,
+            window_s=window_s, estimate=show_est, quality_components=components,
+            complexion=complexion, reason=gate.reason,
+            scan_progress_s=self._scan.progress_clean_s,
+            scan_target_s=self.health_config.scan_window_s,
+        ))
+        self.health_pub.publish(msg)
+
     def image_callback(self, msg: Image):
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         stamp = Time.from_msg(msg.header.stamp)
         self._print_fps(stamp)
+
+        if getattr(self, "health_config", None) and self.health_config.enabled:
+            self._health_last_frame_t = stamp.nanoseconds / 1e9
+            self._sample_health_roi(cv_image, self._health_last_frame_t)
 
         self._frame_counter += 1
         if (
@@ -346,6 +470,7 @@ class BodyTrackingNode(Node):
 
         # Draw overlays when we are saving a debug video OR streaming to the UI.
         draw_overlays = self.debug or self.publish_annotated
+
         tracking_result = self.body_detector.detect(
             cv_image,
             frame_timestamp_ms=int(stamp.nanoseconds / 1e6),
@@ -369,6 +494,9 @@ class BodyTrackingNode(Node):
         self._last_annotated = annotated
         self._last_fall_msg = fall_msg
         self._publish_annotated(annotated, fall_msg)
+
+        if getattr(self, "health_config", None) and self.health_config.enabled:
+            self._update_health_roi(cv_image)
 
         tracking_result.debug_frame = None
         self.tracking_results.append(tracking_result)
