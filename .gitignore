@@ -67,3 +67,7 @@ cache/
 
 # Superpowers subagent-driven-development scratch
 .superpowers/
+
+# Reviewer outputs from the pre-commit gate (AGENTS.md §4)
+.review/
+.gstack/

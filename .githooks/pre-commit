@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Pre-commit review gate: Codex (primary) -> agy (fallback) -> abort.
+#
+# SKIP_CODEX_REVIEW=1  skips ONLY Codex; agy still runs.
+# SKIP_ALL_REVIEW=1    skips ALL automated review. Use ONLY when every reviewer
+#                      is genuinely down AND you ran a manual review first,
+#                      saved to .review/, and referenced it in the commit body.
+#
+# NEVER use `git commit --no-verify` — it skips this hook entirely.
+#
+# Activate per clone:  git config core.hooksPath .githooks
+
+set -euo pipefail
+
+REVIEW_DIR=".review"
+
+# --- Skip conditions ---------------------------------------------------------
+
+SKIP_CODEX_FLAG=0
+if [[ "${SKIP_CODEX_REVIEW:-0}" == "1" ]]; then
+  SKIP_CODEX_FLAG=1
+  echo "[pre-commit] SKIP_CODEX_REVIEW=1 — skipping Codex, will try agy."
+fi
+
+if [[ "${SKIP_ALL_REVIEW:-0}" == "1" ]]; then
+  echo "[pre-commit] SKIP_ALL_REVIEW=1 — assuming a manual review was run."
+  echo "[pre-commit] Reference the .review/ file in the commit body (AGENTS.md §4)."
+  exit 0
+fi
+
+DIFF="$(git diff --cached --no-color)"
+[[ -z "$DIFF" ]] && exit 0
+
+LINES_CHANGED="$(git diff --cached --numstat | awk '{s += $1 + $2} END {print s+0}')"
+if [[ "$LINES_CHANGED" -le 10 ]]; then
+  echo "[pre-commit] ${LINES_CHANGED} staged lines — below review threshold, skipping."
+  exit 0
+fi
+
+NON_DOC_FILES="$(
+  git diff --cached --name-only \
+    | grep -Ev '^(docs/|README\.md$|AGENTS\.md$|GEMINI\.md$|CLAUDE\.md$|DEPLOYMENT\.md$|\.gitignore$)' \
+    || true
+)"
+if [[ -z "$NON_DOC_FILES" ]]; then
+  echo "[pre-commit] Docs-only commit — skipping review."
+  exit 0
+fi
+
+# --- Setup -------------------------------------------------------------------
+
+mkdir -p "$REVIEW_DIR"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+REVIEW_OUTPUT="${REVIEW_DIR}/review-${STAMP}.txt"
+
+STASHED=0
+cleanup() {
+  if [[ "$STASHED" == "1" ]]; then
+    git stash pop --quiet >/dev/null 2>&1 || \
+      echo "[pre-commit] WARNING: failed to restore unstaged changes. Run 'git stash list'."
+  fi
+}
+trap cleanup EXIT
+
+# Stash unstaged changes so the reviewer sees ONLY what is being committed.
+if ! git diff --quiet; then
+  if git stash push --keep-index --include-untracked --quiet \
+        -m "pre-commit-review-${STAMP}"; then
+    STASHED=1
+  else
+    echo "[pre-commit] WARNING: could not stash unstaged changes; review may see extra context."
+  fi
+fi
+
+# --- Review prompt -----------------------------------------------------------
+
+PROMPT="Review the staged changes for the dorabot_ws project — an autonomous
+robot stack on an Orange Pi 5 (RK3588S, RealSense D415): ROS 2 perception
+(YOLO on NPU + MediaPipe pose, fall detection), a FastAPI orchestrator, and a
+voice chatbot. Project conventions live in AGENTS.md at the repo root — read it
+before judging convention violations.
+
+Run \`git diff --cached --no-color\` to see exactly what is being committed.
+Read AGENTS.md and docs/superpowers/STATE.md for conventions and active scope.
+
+Focus on:
+- Correctness bugs (off-by-one, race conditions, wrong assumptions, silent
+  numerical corruption). This code computes VITAL SIGNS from a camera: a
+  plausible-but-wrong number that fails silently is the worst outcome. Prefer a
+  loud failure over a confident wrong answer.
+- Constraint violations: numpy must stay pinned ==1.26.4; the
+  src/perception/src/body_tracking/health/ package must NOT import rclpy,
+  cv_bridge, or any ROS module; no heavy work in the perception image callback
+  (it shares the hot path with safety-critical fall detection).
+- Product constraints: the health feature is NON-MEDICAL. No health/vitality/
+  diagnostic language in user-facing strings. v1 is heart-rate only —
+  resp_bpm, hrv_sdnn_ms, spo2_pct must always be null. hr_bpm/hr_confidence
+  must be null (never 0) when there is no reading.
+- Test quality: are the tests DISCRIMINATIVE? Would they still pass against a
+  deliberately broken implementation? Flag vacuous or tautological tests.
+- Security issues (secrets, injection, unsafe defaults).
+- Scope drift beyond the active task in docs/superpowers/STATE.md.
+
+Output format:
+- One bullet per concern: severity (blocker|major|minor|nit), file:line,
+  one-sentence description, one-sentence fix.
+- If you find nothing of concern, say so explicitly.
+
+End your output with EXACTLY ONE of these lines on its own:
+  VERDICT: APPROVED
+  VERDICT: BLOCKER
+  VERDICT: ADVISORY"
+
+# --- Run reviewers -----------------------------------------------------------
+
+run_codex() {
+  timeout 1800 codex exec review --skip-git-repo-check "$PROMPT" >"$REVIEW_OUTPUT" 2>&1
+}
+
+run_agy() {
+  echo "$DIFF" | agy -p "$PROMPT" --dangerously-skip-permissions >"$REVIEW_OUTPUT" 2>&1
+}
+
+if [[ "$SKIP_CODEX_FLAG" == "0" ]] && command -v codex >/dev/null 2>&1; then
+  echo "[pre-commit] Running Codex review on ${LINES_CHANGED} staged lines (up to 30 min)..."
+  if ! run_codex; then
+    echo "[pre-commit] Codex failed (quota/error/timeout). Falling back to agy..."
+    SKIP_CODEX_FLAG=1
+  fi
+else
+  [[ "$SKIP_CODEX_FLAG" == "1" ]] \
+    && echo "[pre-commit] Codex skipped per SKIP_CODEX_REVIEW=1." \
+    || echo "[pre-commit] Codex not found."
+  SKIP_CODEX_FLAG=1
+fi
+
+if [[ "$SKIP_CODEX_FLAG" == "1" ]]; then
+  if command -v agy >/dev/null 2>&1; then
+    echo "[pre-commit] Running agy review on ${LINES_CHANGED} staged lines..."
+    if ! run_agy; then
+      echo "[pre-commit] agy failed."
+      echo "[pre-commit] All automated reviewers unavailable."
+      echo "[pre-commit] Fallback: opencode run --model deepseek/deepseek-reasoner \"review the staged diff...\""
+      echo "[pre-commit] Then: SKIP_ALL_REVIEW=1 git commit -m '...'  (reference the .review/ file)"
+      exit 1
+    fi
+  else
+    echo "[pre-commit] agy not found. All automated reviewers unavailable."
+    echo "[pre-commit] Fallback: opencode run --model deepseek/deepseek-reasoner \"review the staged diff...\""
+    echo "[pre-commit] Then: SKIP_ALL_REVIEW=1 git commit -m '...'  (reference the .review/ file)"
+    exit 1
+  fi
+fi
+
+echo ""
+echo "===== Review (saved to ${REVIEW_OUTPUT}) ====="
+cat "$REVIEW_OUTPUT"
+echo "=============================================="
+echo ""
+
+# --- Verdict -----------------------------------------------------------------
+
+VERDICT="$(grep -E '^VERDICT:' "$REVIEW_OUTPUT" | tail -n 1 || true)"
+
+case "$VERDICT" in
+  *APPROVED*)
+    echo "[pre-commit] APPROVED — proceeding with commit."
+    exit 0
+    ;;
+  *BLOCKER*)
+    echo "[pre-commit] BLOCKER — commit aborted."
+    echo "[pre-commit] Address the concerns above, re-stage, and try again."
+    echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
+    exit 1
+    ;;
+  *ADVISORY*)
+    echo "[pre-commit] ADVISORY — non-blocking concerns. Proceeding."
+    echo "[pre-commit] Address them in a follow-up commit."
+    exit 0
+    ;;
+  *)
+    # No explicit VERDICT line — infer from severity keywords.
+    LAST_BLOCK="$(tail -n 80 "$REVIEW_OUTPUT")"
+
+    if echo "$LAST_BLOCK" | grep -qiE '\[P[01]\]|severity:[[:space:]]*(blocker|major|critical|high)|^[[:space:]]*[-*][[:space:]]*(blocker|major):|must[[:space:]]+fix'; then
+      echo "[pre-commit] High-severity findings — inferring BLOCKER. Commit aborted."
+      echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
+      exit 1
+    fi
+
+    if echo "$LAST_BLOCK" | grep -qiE 'no (issues|concerns|problems|findings)|nothing of concern|did not find any|looks good|all clear'; then
+      echo "[pre-commit] Reviewer prose indicates a clean review. Inferring APPROVED."
+      exit 0
+    fi
+
+    if echo "$LAST_BLOCK" | grep -qiE '\[P[2-4]\]|severity:[[:space:]]*(minor|nit|low|medium)|^[[:space:]]*[-*][[:space:]]*(minor|nit):'; then
+      echo "[pre-commit] Low-severity findings only — inferring ADVISORY. Proceeding."
+      exit 0
+    fi
+
+    echo "[pre-commit] Verdict ambiguous — commit aborted (fail closed)."
+    echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
+    echo "[pre-commit] If the concerns are false positives: SKIP_CODEX_REVIEW=1 git commit ..."
+    exit 1
+    ;;
+esac
