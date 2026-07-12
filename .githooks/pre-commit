@@ -182,39 +182,48 @@ case "$VERDICT" in
     exit 0
     ;;
   *)
-    # No explicit VERDICT line — infer from severity keywords.
-    LAST_BLOCK="$(tail -n 80 "$REVIEW_OUTPUT")"
+    # No explicit VERDICT line. Codex reliably ignores the instruction to emit one,
+    # so inference is the normal path, not the exception -- it has to be sound.
+    #
+    # Isolate the reviewer's FINAL ANSWER. The transcript is thousands of lines and
+    # contains the echoed prompt plus the reasoning trace, both of which mention
+    # severity words. Codex prints a bare `codex` line immediately before its answer.
+    # (The old code read `tail -n 80`, which silently truncated: a final answer
+    # longer than 80 lines would hide its own findings and could be read as clean --
+    # a failure in the dangerous direction.)
+    ANSWER_AT="$(grep -n '^codex$' "$REVIEW_OUTPUT" | tail -n 1 | cut -d: -f1 || true)"
+    if [[ -n "$ANSWER_AT" ]]; then
+      BODY="$(tail -n +"$((ANSWER_AT + 1))" "$REVIEW_OUTPUT")"
+    else
+      BODY="$(tail -n 200 "$REVIEW_OUTPUT")"
+    fi
 
-    # The prompt asks for findings as "severity, file:line", so severities arrive in
-    # COMMA form. Match comma and colon both -- a `- major, foo.py:12` finding must
-    # not slip past this check and then get waved through by the clean-prose rule.
-    SEVERITY_BULLET='^[[:space:]]*[-*][[:space:]]*(blocker|major|critical|high|minor|nit|low|medium)[,:[:space:]]'
+    # The prompt asks for findings as "severity, file:line" -- so severities arrive
+    # in COMMA form. Match comma and colon both.
     HIGH_SEVERITY='\[P[01]\]|severity:[[:space:]]*(blocker|major|critical|high)|^[[:space:]]*[-*][[:space:]]*(blocker|major|critical|high)[,:[:space:]]|must[[:space:]]+fix'
+    ANY_FINDING='\[P[0-4]\]|severity:[[:space:]]*(blocker|major|critical|high|minor|nit|low|medium)|^[[:space:]]*[-*][[:space:]]*(blocker|major|critical|high|minor|nit|low|medium)[,:[:space:]]'
 
-    if echo "$LAST_BLOCK" | grep -qiE "$HIGH_SEVERITY"; then
+    if echo "$BODY" | grep -qiE "$HIGH_SEVERITY"; then
       echo "[pre-commit] High-severity findings — inferring BLOCKER. Commit aborted."
       echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
       exit 1
     fi
 
-    # Clean-review prose -- but ONLY when the reviewer listed no findings at all.
-    # A reviewer that files a finding and then closes with "No other issues were
-    # found" must not be read as an approval; fall through to the severity rules.
-    if echo "$LAST_BLOCK" | grep -qiE "$SEVERITY_BULLET|\[P[0-4]\]"; then
-      echo "[pre-commit] Reviewer listed findings — not inferring APPROVED from prose."
-    elif echo "$LAST_BLOCK" | grep -qiE \
-        'no[^.]*(issues|concerns|problems|findings)[^.]*(found|identified|detected)|no (issues|concerns|problems|findings)|found no[^.]*(issues|concerns|problems)|nothing of concern|did not find any|looks good|all clear'; then
-      echo "[pre-commit] Reviewer prose indicates a clean review. Inferring APPROVED."
-      exit 0
-    fi
-
-    # Comma form here too -- the prompt asks for "severity, file:line".
-    if echo "$LAST_BLOCK" | grep -qiE '\[P[2-4]\]|severity:[[:space:]]*(minor|nit|low|medium)|^[[:space:]]*[-*][[:space:]]*(minor|nit|low|medium)[,:[:space:]]'; then
+    if echo "$BODY" | grep -qiE "$ANY_FINDING"; then
       echo "[pre-commit] Low-severity findings only — inferring ADVISORY. Proceeding."
       exit 0
     fi
 
-    echo "[pre-commit] Verdict ambiguous — commit aborted (fail closed)."
+    # No findings of ANY severity in the final answer. The prompt mandates one bullet
+    # per concern, so zero bullets means zero concerns -- infer APPROVED rather than
+    # pattern-matching the reviewer's praise, which is unbounded prose and was
+    # aborting clean reviews. Guard only against a truncated/empty answer.
+    if [[ "${#BODY}" -ge 80 ]]; then
+      echo "[pre-commit] Reviewer raised no findings — inferring APPROVED."
+      exit 0
+    fi
+
+    echo "[pre-commit] Reviewer output too short to trust — commit aborted (fail closed)."
     echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
     echo "[pre-commit] If the concerns are false positives: SKIP_CODEX_REVIEW=1 git commit ..."
     exit 1
