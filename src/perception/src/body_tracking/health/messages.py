@@ -1,8 +1,29 @@
-from typing import Optional
+from typing import Any, Optional
+
+import numpy as np
 
 from .types import PulseEstimate, ScanState
 
 SCHEMA_VERSION = 1
+
+
+def _coerce(obj: Any) -> Any:
+    """Recursively convert numpy scalars to native Python types.
+
+    Returns a deep copy of *obj* with every ``numpy.generic`` leaf replaced
+    by its native ``.item()`` equivalent.  ``None`` passes through unchanged.
+    Unknown non-dict, non-list types are left untouched so that a downstream
+    ``json.dumps`` will still fail loudly on truly broken data.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: _coerce(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_coerce(v) for v in obj]
+    return obj
 
 
 def build_metrics(
@@ -20,7 +41,7 @@ def build_metrics(
 ) -> dict:
     hr = estimate.hr_bpm if estimate is not None else None
     conf = estimate.confidence if (estimate is not None and hr is not None) else None
-    return {
+    return _coerce({
         "schema_version": SCHEMA_VERSION,
         "ts": ts,
         "mode": mode,
@@ -36,4 +57,4 @@ def build_metrics(
         "hrv_sdnn_ms": None,  # not_supported in v1
         "spo2_pct": None,     # not_supported in v1
         "scan": {"progress_clean_s": round(scan_progress_s, 1), "target_s": scan_target_s},
-    }
+    })
