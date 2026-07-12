@@ -45,12 +45,14 @@ def test_numpy_scalars_are_coerced_to_native_types():
         complexion={"appearance_zh": np.str_("面色红润")},
         reason=None, scan_progress_s=0.0, scan_target_s=30.0,
     )
+    assert type(msg["quality_components"]["face_px"]) is int
+    assert type(msg["quality_components"]["drop_ratio"]) is float
+    assert type(msg["quality_components"]["exposure_stable"]) is bool
+    assert type(msg["complexion"]["appearance_zh"]) is str
     dump = json.dumps(msg)
     parsed = json.loads(dump)
     assert parsed["hr_bpm"] == 72.0
     assert parsed["quality_components"]["face_px"] == 180
-    assert isinstance(parsed["quality_components"]["face_px"], int)
-    assert isinstance(parsed["quality_components"]["effective_fps"], float)
 
 
 def test_hr_null_when_estimate_has_none_hr():
