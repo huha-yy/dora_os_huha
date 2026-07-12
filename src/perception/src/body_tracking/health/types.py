@@ -9,6 +9,11 @@ class RgbSample:
     r: float
     g: float
     b: float
+    # ROI geometry, full-frame pixels. Optional so older call sites keep working,
+    # but the artifact metrics fail CLOSED when they are absent -- see artifacts.py.
+    cx: Optional[float] = None  # ROI centroid x
+    cy: Optional[float] = None  # ROI centroid y
+    w: Optional[float] = None   # face width, the scale used to normalise motion
 
 
 @dataclass(frozen=True)

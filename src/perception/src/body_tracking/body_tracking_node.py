@@ -15,10 +15,10 @@ from tqdm import tqdm
 from .body_detector import BodyDetector
 from .health import (
     RPPGEstimator, ScanController, HealthConfig, RgbSample, ScanState, build_metrics,
-    describe_complexion, evaluate_gates,
+    describe_complexion, evaluate_gates, motion_metric, illumination_metric, FAIL_CLOSED,
 )
 from .health.roi_detector import FaceRoiExtractor
-from .health.roi import sample_mean_rgb, roi_pixel_count
+from .health.roi import sample_mean_rgb, roi_pixel_count, roi_centroid
 from .state import FrameTrackingResult, RawPose, HumanStatus
 from collections import deque
 import logging
@@ -381,7 +381,13 @@ class BodyTrackingNode(Node):
             return
         r, g, b = sample
         self._health_last_mean = (r, g, b, roi.face_px, roi_pixel_count(frame, roi))
-        self._rppg.add_sample(RgbSample(t=t_sec, r=r, g=g, b=b))
+        # Carry the ROI geometry on the sample: the motion gate measures how far
+        # the face wanders across the analysis window, and fails closed without it.
+        centroid = roi_centroid(roi)
+        cx, cy = centroid if centroid is not None else (None, None)
+        self._rppg.add_sample(RgbSample(
+            t=t_sec, r=r, g=g, b=b, cx=cx, cy=cy, w=float(roi.face_px),
+        ))
 
     def _on_scan_cmd(self, msg: String) -> None:
         try:
@@ -407,16 +413,22 @@ class BodyTrackingNode(Node):
         stale = frame_age > 5.0
 
         window_s = self.health_config.ambient_window_s
+        # Every gate component is derived from the sample window alone, so the gates
+        # are evaluated BEFORE the estimate. `estimate()` is stateful (it commits the
+        # HR hysteresis anchor), and a rejected window must never be allowed to
+        # contaminate it -- see RPPGEstimator.estimate().
         if stale:
             fps = 0.0
-            est = None
             have_face = False
             drop_ratio = 1.0
             jitter_ms = 999.0
+            motion = FAIL_CLOSED
+            illum_delta = FAIL_CLOSED
         else:
             fps = self._rppg.effective_fps(self._health_last_frame_t, window_s)
-            est = self._rppg.estimate(self._health_last_frame_t, window_s)
-            win = self._rppg._buffer.window(self._health_last_frame_t, window_s)
+            win = self._rppg.window(self._health_last_frame_t, window_s)
+            motion = motion_metric(win)
+            illum_delta = illumination_metric(win)
             if len(win) >= 2:
                 intervals = np.diff([s.t for s in win])
                 jitter_ms = float(np.std(intervals)) * 1000.0 if len(intervals) > 1 else 0.0
@@ -437,11 +449,18 @@ class BodyTrackingNode(Node):
             "effective_fps": fps,
             "drop_ratio": drop_ratio,
             "jitter_ms": jitter_ms,
-            "motion": 0.0,
-            "illum_delta": 0.0,
+            "motion": motion,
+            "illum_delta": illum_delta,
+            # TODO(Task 16): report the real RealSense exposure/WB lock state. Until
+            # then illum_delta above catches the observable symptom of exposure
+            # hunting (luminance drift). Tracked as a known gap in STATE.md.
             "exposure_stable": True,
         }
         gate = evaluate_gates(components, self.health_config.gates)
+
+        # A failed gate short-circuits inside estimate() and resets the hysteresis;
+        # when stale, `face_present` is False, so the gate has already failed.
+        est = self._rppg.estimate(self._health_last_frame_t, window_s, gate_ok=gate.ok)
 
         show_est = est if (gate.ok and est is not None) else None
         prev_state = self._scan.state

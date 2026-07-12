@@ -42,52 +42,68 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 13 | Wire health pipeline into perception node | done | `048a901`, fixed `e6c01bd` |
 | 14 | Orchestrator HealthBus + HTTP router | done | `617393c` |
 | 15 | Orchestrator ROS bridge | done | `ce53f86` |
-| **15b** | **Real motion + illumination gates** | **NEXT** | |
+| 15b | Real motion + illumination gates | done | see below |
 | 16 | On-device integration + FPS smoke test | blocked — needs the Orange Pi | |
-| 17 | Monitor UI (HR chip + scan card) | not started | |
+| **17** | **Monitor UI (HR chip + scan card)** | **NEXT** | |
 | 18 | Config plumbing + docs | not started | |
 
-Test suite currently: **87 passing** (`tests/health`).
+Test suite currently: **108 passing** (`tests/`).
+
+**Next up: Tasks 17 and 18** — neither needs hardware. Coder prompt:
+`docs/superpowers/prompts/2026-07-12-rppg-gates-and-ui-prompt.md` (skip its Task
+15b section — that is now done; start at Task 17).
 
 ---
 
-## Next step — Task 15b: make the motion and illumination gates real
+## Task 15b — DONE (2026-07-12)
 
-**Why this exists.** Codex raised this as a **[P1]** on Task 13 and again on
-`e6c01bd`. The Coder overrode it (`.review/manual-review-task13.txt`) on the
-grounds that "the plan's Task 13 reference code uses these same pass values."
-That is not a valid reason — the plan's reference code has been wrong three
-times already (see "Plan corrections" below), which is why the review gate
-exists. The human adjudicated on 2026-07-12: **implement the gates now.**
+Codex raised a **[P1]** on Task 13 and again on `e6c01bd`: the node hard-coded
+`motion=0.0`, `illum_delta=0.0`, `exposure_stable=True`, so three of the eight
+quality gates could never fail. The Coder overrode it by citing the plan. The
+human adjudicated: implement them. Done.
 
-**The defect.** `body_tracking_node.py:440-442` hard-codes three of the eight
-quality-gate components to always-pass values:
+`health/artifacts.py` now computes both over the analysis window:
 
-```python
-"motion": 0.0,          # gate max_motion=0.05      → can never fail
-"illum_delta": 0.0,     # gate max_illum_delta=0.15 → can never fail
-"exposure_stable": True,
-```
+- `motion` = `sqrt(var(cx) + var(cy)) / mean(face_width)` — centroid dispersion in
+  face widths, so it is scale- and distance-invariant.
+- `illum_delta` = `std(luminance) / mean(luminance)` — a coefficient of variation.
+  Relative, not absolute: the pulse *is* a 0.1–1% luminance modulation, and an
+  absolute threshold would gate out the signal we are trying to measure.
 
-Head motion is the single largest source of rPPG artifacts: movement aliases
-directly into the 0.7–4 Hz pulse band, so a moving subject does not produce *no*
-reading — it produces a **confident wrong** one. The motion gate is the primary
-defence against exactly the failure mode AGENTS.md §5 says to avoid above all.
-With it stubbed open, the gate is decorative.
+Both fail **closed** (`FAIL_CLOSED = 1e9`) on any degenerate input — too few
+samples, missing ROI geometry, non-finite values, black ROI. `0.0` would *pass*
+the gate, which was the whole defect.
 
-Note `evaluate_gates()` already fails closed on a *missing* key (`motion`
-defaults to `1e9`). The node is actively supplying pass values to override that.
+The node now populates `cx`/`cy`/`w` on every `RgbSample` (via the new
+`roi_centroid()`), and the deferred **T13** finding is fixed — it uses the new
+public `RPPGEstimator.window()` instead of reaching into `_buffer`.
 
-**Scope: motion and illum_delta only.** `exposure_stable` genuinely needs the
-RealSense (locking exposure/WB), which is Task 16 on-device work. It stays
-`True` for now — defensible because `illum_delta` measures the observable
-*consequence* of exposure instability (luminance drift from auto-exposure
-hunting), so it is no longer the only thing standing between us and a bad
-reading. **This is a known, tracked gap — close it in Task 16.**
+### The gate alone was not enough — hysteresis contamination
 
-**Ordering.** 15b comes before Task 16. Running the on-device smoke test with
-the motion gate stubbed open would validate a system whose main safety gate does
-nothing — the test could not tell a good reading from a motion artifact.
+Codex caught a second **[P1]** on the first attempt at this fix, and it was right.
+`RPPGEstimator.estimate()` is **stateful**: `_last_hr` anchors the ±12 bpm
+hysteresis clamp. The node called it *before* evaluating the gates, so a
+motion-corrupted window was rejected for publication but **still committed
+`_last_hr`** — and the next *accepted* reading was then clamped toward the
+artifact. Demonstrated: a rejected 150 bpm window followed by a clean 72 bpm one
+published **118**. The gate rejected the bad window and leaked it anyway.
+
+Fixed by evaluating the gates first (every component derives from the sample
+window alone, so nothing needed the estimate) and giving `estimate()` a
+**required** `gate_ok` parameter — no default, so a caller cannot silently restore
+the bug. A rejected window short-circuits and resets the hysteresis, leaving the
+next clean reading free to be correct.
+
+**Lesson: a quality gate is only as good as what it gates.** Rejecting a value at
+the *publish* boundary is not enough when the estimator carries state across
+windows.
+
+### Known gap — `exposure_stable` is still hard-coded `True`
+
+It needs the RealSense exposure/WB lock, which is **Task 16** on-device work.
+This is defensible for now only because `illum_delta` catches the observable
+*symptom* of exposure hunting (luminance drift) — it is no longer the sole
+defence. **Close it in Task 16.** There is a `TODO(Task 16)` at the site.
 
 ---
 

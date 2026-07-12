@@ -191,7 +191,13 @@ case "$VERDICT" in
       exit 1
     fi
 
-    if echo "$LAST_BLOCK" | grep -qiE 'no (issues|concerns|problems|findings)|nothing of concern|did not find any|looks good|all clear'; then
+    # Clean-review prose. Safe to match loosely: the high-severity check above has
+    # already run, so a review that both praises and blocks is caught there first.
+    # The qualified form ("No correctness, safety, or scope issues were found") is
+    # what Codex actually emits -- the older `no (issues|...)` pattern required the
+    # words to be adjacent and failed closed on a passing review.
+    if echo "$LAST_BLOCK" | grep -qiE \
+        'no[^.]*(issues|concerns|problems|findings)[^.]*(found|identified|detected)|no (issues|concerns|problems|findings)|found no[^.]*(issues|concerns|problems)|nothing of concern|did not find any|looks good|all clear'; then
       echo "[pre-commit] Reviewer prose indicates a clean review. Inferring APPROVED."
       exit 0
     fi

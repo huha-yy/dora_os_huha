@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -23,7 +23,29 @@ class RPPGEstimator:
     def effective_fps(self, now: float, window_s: float) -> float:
         return self._buffer.effective_fps(now, window_s)
 
-    def estimate(self, now: float, window_s: float) -> PulseEstimate:
+    def window(self, now: float, window_s: float) -> List[RgbSample]:
+        """The samples the next estimate would use. Callers need these for the
+        quality gates (drop, jitter, motion, illumination) and must not reach
+        into the private buffer to get them."""
+        return self._buffer.window(now, window_s)
+
+    def estimate(self, now: float, window_s: float, gate_ok: bool) -> PulseEstimate:
+        """Estimate the pulse over the window.
+
+        `gate_ok` is REQUIRED and has no default: this method is stateful, and a
+        caller that forgot it would silently reintroduce a real bug.
+
+        `_last_hr` anchors the +/-MAX_HR_JUMP_BPM hysteresis clamp. A window the
+        quality gates rejected (head motion, lighting change) must therefore not
+        be allowed to commit it -- otherwise the artifact drags the next
+        *accepted* reading toward itself, and the gate ends up rejecting the bad
+        window for publication while still leaking it into the good one that
+        follows. Rejecting resets the hysteresis so the next clean reading is
+        free to be correct.
+        """
+        if not gate_ok:
+            self._last_hr = None
+            return PulseEstimate(None, 0.0, 0.0, 0.0)
         win = self._buffer.window(now, window_s)
         if len(win) < 3:
             self._last_hr = None

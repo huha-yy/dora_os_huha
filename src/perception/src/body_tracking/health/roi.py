@@ -86,6 +86,21 @@ def sample_mean_rgb(frame_bgr: np.ndarray, roi: FaceRoi) -> Optional[Tuple[float
     return (r, g, b)
 
 
+def roi_centroid(roi: FaceRoi) -> Optional[Tuple[float, float]]:
+    """Area-weighted centre of the ROI patches, in full-frame pixels.
+
+    This is the position the motion metric tracks across the window. Weighting by
+    patch area keeps the centre stable when one patch is clipped at a frame edge.
+    """
+    valid = [(x, y, w, h) for (x, y, w, h) in roi.patches if w > 0 and h > 0]
+    total = sum(w * h for (_, _, w, h) in valid)
+    if total <= 0:
+        return None
+    cx = sum((x + w / 2.0) * w * h for (x, _, w, h) in valid) / total
+    cy = sum((y + h / 2.0) * w * h for (_, y, w, h) in valid) / total
+    return (cx, cy)
+
+
 def roi_pixel_count(frame_bgr: np.ndarray, roi: FaceRoi) -> int:
     h_frame, w_frame = frame_bgr.shape[:2]
     return int(sum(w * h for (_, _, w, h) in _iter_valid_patches(roi.patches, w_frame, h_frame)))
