@@ -214,10 +214,21 @@ case "$VERDICT" in
       exit 0
     fi
 
-    # No findings of ANY severity in the final answer. The prompt mandates one bullet
-    # per concern, so zero bullets means zero concerns -- infer APPROVED rather than
-    # pattern-matching the reviewer's praise, which is unbounded prose and was
-    # aborting clean reviews. Guard only against a truncated/empty answer.
+    # "No findings" only means "approved" if the reviewer actually REVIEWED. A run
+    # that bailed out ("I couldn't inspect the staged diff", "no changes to review")
+    # also lists no findings, and must not be read as a pass -- that is the one
+    # direction this gate can never fail in.
+    REVIEW_FAILED='(could[[:space:]]*n.t|can[[:space:]]*not|can.t|unable to|failed to|was not able to)[^.]*(inspect|review|read|access|analy[sz]|examin|see|run|obtain|retrieve)|no (staged )?(diff|changes)( |$)|nothing to review|i (do not|don.t) have access|error'
+    if echo "$BODY" | grep -qiE "$REVIEW_FAILED"; then
+      echo "[pre-commit] Reviewer could not complete the review — commit aborted (fail closed)."
+      echo "[pre-commit] Review saved: ${REVIEW_OUTPUT}"
+      exit 1
+    fi
+
+    # No findings of ANY severity, and the reviewer completed. The prompt mandates one
+    # bullet per concern, so zero bullets means zero concerns -- infer APPROVED rather
+    # than pattern-matching the reviewer's praise, which is unbounded prose and was
+    # aborting clean reviews. Guard against a truncated/empty answer.
     if [[ "${#BODY}" -ge 80 ]]; then
       echo "[pre-commit] Reviewer raised no findings — inferring APPROVED."
       exit 0
