@@ -1966,6 +1966,141 @@ git commit -m "feat: bridge /health/metrics and /health/scan_cmd in orchestrator
 
 ---
 
+### Task 15b: Real motion + illumination gates
+
+**Why:** Codex raised a **[P1]** on Task 13 and again on `e6c01bd`:
+`body_tracking_node.py:440-442` hard-codes `motion=0.0`, `illum_delta=0.0`,
+`exposure_stable=True`, so three of the eight quality gates can never fail. Head
+motion is the dominant rPPG artifact — it aliases into the 0.7–4 Hz pulse band
+and yields a *confident wrong* BPM rather than no BPM. The human adjudicated on
+2026-07-12: implement them now, before the on-device test.
+
+**Files:**
+- Modify: `src/perception/src/body_tracking/health/types.py`
+- Create: `src/perception/src/body_tracking/health/artifacts.py`
+- Create: `src/perception/tests/health/test_artifacts.py`
+- Modify: `src/perception/src/body_tracking/health/__init__.py` (exports)
+- Modify: `src/perception/src/body_tracking/body_tracking_node.py`
+
+**Scope:** `motion` and `illum_delta` only. `exposure_stable` genuinely needs the
+RealSense exposure/WB lock (Task 16) — leave it `True` and leave the known-gap
+note in STATE.md. Do not silently widen the scope.
+
+#### The metrics
+
+Both are computed over the **analysis window**, not frame-to-frame. That is the
+physically meaningful quantity: rPPG needs the ROI stationary across the window
+being transformed, and a per-frame delta is both frame-rate dependent and far too
+noisy to threshold.
+
+**`motion`** — spatial dispersion of the ROI centroid over the window, expressed
+in **face widths** (dimensionless, so it is scale- and distance-invariant):
+
+```
+motion = sqrt(var(cx) + var(cy)) / mean(w)
+```
+
+**`illum_delta`** — coefficient of variation of ROI luminance over the window
+(dimensionless):
+
+```
+lum_i       = (r_i + g_i + b_i) / 3
+illum_delta = std(lum) / mean(lum)
+```
+
+#### Calibration — do NOT retune the thresholds to make a test pass
+
+The existing gates are `max_motion=0.05` and `max_illum_delta=0.15`. The metrics
+above are defined so those committed thresholds are already correct:
+
+| Condition | motion | vs 0.05 |
+|---|---|---|
+| Still subject, 1–2 px detector jitter on a 150 px face | ~0.007–0.013 | passes |
+| Subject drifts / turns ~half a face width across the window | ~0.15 | fails |
+
+| Condition | illum_delta | vs 0.15 |
+|---|---|---|
+| Static lighting | < 0.01 | passes |
+| The pulse signal itself (0.1–1% modulation) | ~0.001–0.01 | passes — must not gate out the signal we want |
+| Lamp switched, or subject moves under a light | > 0.15 | fails |
+
+If a test disagrees with these numbers, the **metric implementation** is wrong,
+not the threshold. Do not touch `config.py`.
+
+#### Steps
+
+- [ ] **Step 1: Carry the ROI geometry on the sample**
+
+Extend `RgbSample` with three **optional** fields (keeps every existing call site
+and test compiling):
+
+```python
+@dataclass(frozen=True)
+class RgbSample:
+    t: float
+    r: float
+    g: float
+    b: float
+    cx: Optional[float] = None   # ROI centroid x, pixels
+    cy: Optional[float] = None   # ROI centroid y, pixels
+    w:  Optional[float] = None   # ROI width, pixels
+```
+
+- [ ] **Step 2: Write the failing tests first** (`test_artifacts.py`)
+
+Cover, at minimum:
+- a still centroid track → `motion` well under 0.05
+- a centroid drifting half a face width across the window → `motion` over 0.05
+- scale invariance: the same motion at 2× face size and 2× pixel displacement
+  gives the **same** `motion` value
+- constant illumination → `illum_delta` ≈ 0
+- a 0.5% sinusoidal pulse modulation → `illum_delta` well under 0.15 (**this is
+  the discriminative one — a naive implementation that gates on absolute
+  luminance change instead of relative CoV will fail it**)
+- a step change in lighting → `illum_delta` over 0.15
+- **fail-closed:** fewer than 2 samples, or any sample missing `cx`/`cy`/`w`,
+  or `mean(lum) <= 0` → return a value that **fails** the gate (e.g. `1e9`),
+  never a passing one.
+
+- [ ] **Step 3: Implement `artifacts.py`**
+
+```python
+def motion_metric(samples: Sequence[RgbSample]) -> float
+def illumination_metric(samples: Sequence[RgbSample]) -> float
+```
+
+Pure numpy. No ROS. Fail closed (return `1e9`) on any degenerate input — never
+return `0.0` as a "don't know", because `0.0` passes the gate.
+
+- [ ] **Step 4: Negative-control the fail-closed path**
+
+Deliberately change the degenerate-input return from `1e9` to `0.0`, confirm the
+fail-closed tests go red, restore. A test that passes against that mutation is
+not a test.
+
+- [ ] **Step 5: Wire into the node**
+
+- Populate `cx`, `cy`, `w` when appending a sample in `_sample_health_roi`
+  (the `FaceRoi` already has the box — derive the centroid from it).
+- Replace the hard-coded `"motion": 0.0` / `"illum_delta": 0.0` with
+  `motion_metric(win)` / `illumination_metric(win)` over the same window `win`
+  already computed for the drop/jitter gates.
+- Keep `"exposure_stable": True` (Task 16).
+- While you are here, fix the deferred T13 finding: the node reaches into
+  `self._rppg._buffer` (private). Add a public accessor on `RppgEstimator` and
+  use it.
+- In the `stale` branch, `motion`/`illum_delta` must take **failing** values
+  (`1e9`), consistent with `drop_ratio=1.0` / `jitter_ms=999.0`.
+
+- [ ] **Step 6: Full suite green, then commit**
+
+```bash
+cd /extra_space/dorabot_ws/src/perception && PYTHONPATH= /extra_space/dorabot_ws/.venv/bin/python -m pytest tests/ -v
+git commit -m "fix: compute real motion and illumination quality gates"
+```
+
+---
+
 ### Task 16: On-device integration + FPS smoke test
 
 **Files:**
