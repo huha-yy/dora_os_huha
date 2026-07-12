@@ -63,7 +63,10 @@ cleanup() {
 trap cleanup EXIT
 
 # Stash unstaged changes so the reviewer sees ONLY what is being committed.
-if ! git diff --quiet; then
+# `git diff --quiet` alone is not enough: with untracked-only changes it exits 0,
+# so the stash would be skipped and the reviewer would see files outside the commit.
+UNTRACKED="$(git ls-files --others --exclude-standard)"
+if ! git diff --quiet || [[ -n "$UNTRACKED" ]]; then
   if git stash push --keep-index --include-untracked --quiet \
         -m "pre-commit-review-${STAMP}"; then
     STASHED=1
