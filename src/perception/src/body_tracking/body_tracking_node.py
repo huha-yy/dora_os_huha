@@ -14,7 +14,7 @@ import numpy as np
 from tqdm import tqdm
 from .body_detector import BodyDetector
 from .health import (
-    RPPGEstimator, ScanController, HealthConfig, RgbSample, build_metrics,
+    RPPGEstimator, ScanController, HealthConfig, RgbSample, ScanState, build_metrics,
     describe_complexion, evaluate_gates,
 )
 from .health.roi_detector import FaceRoiExtractor
@@ -124,6 +124,8 @@ class BodyTrackingNode(Node):
         self._health_last_mean = None
         self._health_roi_age = 999
         self._health_last_frame_t = 0.0
+        self._health_scan_result = None
+        self._health_last_scan_state = None
         if self.health_config.enabled:
             self._roi_extractor = FaceRoiExtractor()
             self._rppg = RPPGEstimator(self.health_config)
@@ -409,9 +411,20 @@ class BodyTrackingNode(Node):
             fps = 0.0
             est = None
             have_face = False
+            drop_ratio = 1.0
+            jitter_ms = 999.0
         else:
             fps = self._rppg.effective_fps(self._health_last_frame_t, window_s)
             est = self._rppg.estimate(self._health_last_frame_t, window_s)
+            win = self._rppg._buffer.window(self._health_last_frame_t, window_s)
+            if len(win) >= 2:
+                intervals = np.diff([s.t for s in win])
+                jitter_ms = float(np.std(intervals)) * 1000.0 if len(intervals) > 1 else 0.0
+                expected = int(fps * window_s) if fps > 0 else len(win)
+                drop_ratio = max(0.0, 1.0 - len(win) / max(expected, 1))
+            else:
+                drop_ratio = 0.0
+                jitter_ms = 0.0
 
         face_px = self._health_last_mean[3] if have_face else 0
         roi_px = self._health_last_mean[4] if have_face else 0
@@ -422,11 +435,20 @@ class BodyTrackingNode(Node):
             "face_px": face_px,
             "roi_px": roi_px,
             "effective_fps": fps,
+            "drop_ratio": drop_ratio,
+            "jitter_ms": jitter_ms,
+            "motion": 0.0,
+            "illum_delta": 0.0,
+            "exposure_stable": True,
         }
         gate = evaluate_gates(components, self.health_config.gates)
 
         show_est = est if (gate.ok and est is not None) else None
+        prev_state = self._scan.state
         self._scan.update(ros_now, gate.ok and est is not None and est.hr_bpm is not None)
+
+        if self._scan.state == ScanState.COMPLETE and prev_state != ScanState.COMPLETE:
+            self._health_scan_result = show_est
 
         _all_scan_states = {"warming", "collecting", "insufficient_quality", "complete", "failed", "cancelled"}
         mode = (
@@ -436,6 +458,8 @@ class BodyTrackingNode(Node):
             else "ambient"
         )
 
+        publish_est = self._health_scan_result if self._scan.state == ScanState.COMPLETE else show_est
+
         complexion = None
         if self.health_config.complexion_enabled and have_face:
             complexion = describe_complexion(self._health_last_mean[:3])
@@ -443,7 +467,7 @@ class BodyTrackingNode(Node):
         msg = String()
         msg.data = json.dumps(build_metrics(
             ts=ros_now, mode=mode, state=self._scan.state, effective_fps=fps,
-            window_s=window_s, estimate=show_est, quality_components=components,
+            window_s=window_s, estimate=publish_est, quality_components=components,
             complexion=complexion, reason=gate.reason,
             scan_progress_s=self._scan.progress_clean_s,
             scan_target_s=self.health_config.scan_window_s,
