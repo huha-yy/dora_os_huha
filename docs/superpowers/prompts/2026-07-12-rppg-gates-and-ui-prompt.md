@@ -69,34 +69,23 @@ not numpy/scipy, so tests there are meaningless.
 
 ---
 
-### Task 15b — real motion + illumination gates (do this first)
+### Task 15b — DONE (`c58c0de`). Do not redo it.
 
-Full spec is in the plan under **"Task 15b"**. Read it there; it has the metric
-definitions, the calibration table, and the step list.
+The motion and illumination gates are implemented in `health/artifacts.py`. Two
+things landed there that you must not undo:
 
-Summary: `body_tracking_node.py:440-442` hard-codes `motion=0.0`,
-`illum_delta=0.0`, `exposure_stable=True`, so three of eight quality gates can
-never fail. Head motion is the dominant rPPG artifact — it aliases into the
-0.7–4 Hz pulse band and produces a *confident wrong* BPM. Implement `motion` and
-`illum_delta` for real in a new pure-Python `health/artifacts.py`.
+- `RPPGEstimator.estimate()` now takes a **required** `gate_ok` parameter. It is
+  stateful (it commits the HR hysteresis anchor), and a gate-rejected window must
+  not contaminate it. Do not add a default value to that parameter.
+- The gates are evaluated **before** `estimate()` is called in the node. Keep that
+  order.
 
-Three things the plan spells out that you must not get wrong:
-
-1. **Both metrics are computed over the analysis window, not frame-to-frame.**
-   A per-frame delta is frame-rate dependent and far too noisy to threshold.
-2. **Fail closed.** Degenerate input (fewer than 2 samples, missing ROI geometry,
-   non-positive mean luminance) returns `1e9` — a value that *fails* the gate.
-   Never `0.0`; `0.0` passes, and that is the whole bug you are fixing.
-3. **Do not retune `config.py`.** The thresholds (`max_motion=0.05`,
-   `max_illum_delta=0.15`) are already correct for the metrics as defined. If a
-   test disagrees, your metric is wrong, not the threshold.
-
-`exposure_stable` stays `True` — it needs the RealSense lock, which is Task 16.
-Do not widen scope.
+`exposure_stable` is still hard-coded `True` — that needs the RealSense lock and
+belongs to **Task 16**. Leave it. There is a `TODO(Task 16)` at the site.
 
 ---
 
-### Then Task 17 — monitor UI
+### Start here — Task 17: monitor UI
 
 `src/orchestrator/web_server/ui/index.html`. HR chip overlay + scan card, per the
 plan. Bilingual, and the non-medical disclaimer is **required** on the card:
