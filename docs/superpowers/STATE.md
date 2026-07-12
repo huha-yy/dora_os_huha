@@ -42,16 +42,18 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 13 | Wire health pipeline into perception node | done | `048a901`, fixed `e6c01bd` |
 | 14 | Orchestrator HealthBus + HTTP router | done | `617393c` |
 | 15 | Orchestrator ROS bridge | done | `ce53f86` |
-| 15b | Real motion + illumination gates | done | see below |
-| 16 | On-device integration + FPS smoke test | blocked — needs the Orange Pi | |
-| **17** | **Monitor UI (HR chip + scan card)** | **NEXT** | |
-| 18 | Config plumbing + docs | not started | |
+| 15b | Real motion + illumination gates | done | `c58c0de` |
+| 16a | Real-face webcam validation | harness ready — **needs a human to run it** | |
+| 16b | On-device FPS budget + e2e | deferred — needs the Orange Pi | |
+| 17 | Monitor UI (HR chip + scan card) | done | |
+| 18 | Config plumbing + docs | done | |
 
-Test suite currently: **108 passing** (`tests/`).
+Test suite currently: **111 passing** (`tests/`).
 
-**Next up: Tasks 17 and 18** — neither needs hardware. Coder prompt:
-`docs/superpowers/prompts/2026-07-12-rppg-gates-and-ui-prompt.md` (skip its Task
-15b section — that is now done; start at Task 17).
+**The feature is complete for v1.** Only Tasks 16a/16b remain (webcam harness,
+on-device FPS smoke), and they require hardware a human must run.
+Commit the pending tasks in this session, push to `origin/main`, and file any
+ADVISORY findings as GitHub issues.
 
 ---
 
@@ -100,10 +102,46 @@ windows.
 
 ### Known gap — `exposure_stable` is still hard-coded `True`
 
-It needs the RealSense exposure/WB lock, which is **Task 16** on-device work.
+It needs the RealSense exposure/WB lock, which is **Task 16b** on-device work.
 This is defensible for now only because `illum_delta` catches the observable
 *symptom* of exposure hunting (luminance drift) — it is no longer the sole
-defence. **Close it in Task 16.** There is a `TODO(Task 16)` at the site.
+defence. **Close it in Task 16b.** There is a `TODO(Task 16)` at the site.
+
+---
+
+## Task 16 is split — 16a can run today, 16b needs the robot
+
+**The biggest untested assumption in this feature:** all 111 tests validate against
+*synthetic sine waves we generated ourselves*. A pipeline can pass every one of
+them and still recover nothing but noise from an actual human face. Nobody has
+pointed this at a real person yet.
+
+**Task 16a — `scripts/validate_rppg_webcam.py`.** Answers exactly that, on any dev
+machine with a webcam. No ROS, no RealSense, no Pi. It drives the production path
+(`FaceRoiExtractor` → `roi_centroid`/`sample_mean_rgb` → `RgbSample` →
+`RPPGEstimator` + the real gates) and asks two questions:
+
+1. Does POS recover a *plausible, stable* resting HR from a real face?
+2. Does the motion gate *actually fire* when the subject moves?
+
+It needs a human to sit in front of the camera, so it cannot be run by an agent.
+
+```bash
+PYTHONPATH= .venv/bin/python scripts/validate_rppg_webcam.py
+```
+
+Sit close (the gates need a face ≳127 px wide), even lighting, still for 40s, then
+move your head for 12s. It prints why each reading was withheld, so a failure is
+diagnostic rather than mysterious.
+
+**Task 16b — the Orange Pi.** Deferred by the human on 2026-07-12. Still to do:
+- FPS budget, health on vs off. **This is a real decision gate:** if the MediaPipe
+  face detector costs >~15% of fall-detection FPS on the RK3588, switch to the
+  pose-only ROI fallback (`roi_from_pose`, already built in Task 8).
+- The RealSense exposure/WB lock, closing the `exposure_stable` gap above.
+- End-to-end `/health/metrics` topic + HTTP scan on the robot.
+
+x86 FPS numbers say nothing about the RK3588 — do not substitute one for the other.
 
 ---
 

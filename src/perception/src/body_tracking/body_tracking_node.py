@@ -119,7 +119,10 @@ class BodyTrackingNode(Node):
         self.node_up_time = datetime.now().timestamp()
         self.mock_fall_detection = mock_fall_detection
         # --- Health metrics (rPPG) ---
-        self.health_config = HealthConfig.default()
+        self.health_config = HealthConfig.from_dict({
+            "enabled": os.getenv("HEALTH_ENABLED", "1") != "0",
+            "backend": os.getenv("HEALTH_BACKEND", "pos"),
+        })
         self._health_last_roi = None
         self._health_last_mean = None
         self._health_roi_age = 999

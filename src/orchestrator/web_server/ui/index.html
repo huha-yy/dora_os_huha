@@ -96,6 +96,38 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .hr-chip {
+      position: absolute; top: 10px; right: 10px;
+      background: rgba(0,0,0,.6); color: #fff;
+      padding: 4px 10px; border-radius: 14px;
+      font: 600 14px system-ui; z-index: 10;
+    }
+    .hr-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #f33; margin-left: 6px; vertical-align: middle;
+    }
+    .hr-dot.good { background: #3c3; }
+    .hr-dot.mid { background: #fc3; }
+
+    .health-ctrls { padding: 8px 14px; border-top: 1px solid var(--border); flex: 0 0 auto; }
+    .scan-btn {
+      padding: 7px 14px; border: 0; border-radius: 8px; background: #2b6; color: #fff;
+      font: 600 13px system-ui; cursor: pointer;
+    }
+    .scan-btn:disabled { opacity: .5; cursor: default; }
+    .scan-progress { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .scan-bar {
+      height: 4px; background: var(--border); border-radius: 2px; margin-top: 4px; overflow: hidden;
+    }
+    .scan-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s; }
+    .health-card {
+      margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel-2);
+      font-size: 13px;
+    }
+    .health-card .row { display: flex; justify-content: space-between; margin: 3px 0; }
+    .health-card .small { font-size: 12px; opacity: .7; }
+    .health-card .disc { margin-top: 6px; font-size: 11px; opacity: .6; }
+
     .sidebar {
       padding: 0;
       background: var(--bg);
@@ -137,9 +169,26 @@
       </div>
       <div class="video-wrap">
         <img id="video" alt="camera stream" />
+        <div id="hr-chip" class="hr-chip" hidden>
+          <span id="hr-value">--</span> BPM
+          <span id="hr-dot" class="hr-dot"></span>
+        </div>
         <div class="video-overlay" id="video-overlay">
           <div class="spinner"></div>
           <div id="overlay-text">Waiting for camera…</div>
+        </div>
+      </div>
+      <div class="health-ctrls" id="health-ctrls" hidden>
+        <button id="scan-btn" class="scan-btn">健康扫描 / Scan</button>
+        <div id="scan-progress" class="scan-progress" hidden>
+          <div>测量中 Measuring… <span id="scan-pct">0</span>%</div>
+          <div class="scan-bar"><div class="scan-bar-fill" id="scan-bar-fill" style="width:0%"></div></div>
+        </div>
+        <div id="health-card" class="health-card" hidden>
+          <div class="row"><span>心率 Heart rate</span><b id="card-hr">--</b> BPM</div>
+          <div class="row"><span>面色 Complexion</span><b id="card-complexion">--</b></div>
+          <div class="row small" id="card-quality"><span>质量 Quality</span><span id="card-quality-val">--</span></div>
+          <div class="disc">仅供参考，非医疗设备 · For reference only, not a medical device</div>
         </div>
       </div>
     </section>
@@ -250,10 +299,88 @@
       setChatbotStatus();
     }
 
+    const hrChip = document.getElementById('hr-chip');
+    const hrVal = document.getElementById('hr-value');
+    const hrDot = document.getElementById('hr-dot');
+    const healthCtrls = document.getElementById('health-ctrls');
+    const scanBtn = document.getElementById('scan-btn');
+    const scanProg = document.getElementById('scan-progress');
+    const scanPct = document.getElementById('scan-pct');
+    const scanBar = document.getElementById('scan-bar-fill');
+    const healthCard = document.getElementById('health-card');
+    const cardHr = document.getElementById('card-hr');
+    const cardComp = document.getElementById('card-complexion');
+    const cardQ = document.getElementById('card-quality-val');
+    let scanTimer = null;
+
+    async function pollHealth() {
+      try {
+        const m = await (await fetch('/health/live')).json();
+        if (m && m.hr_bpm != null) {
+          hrChip.hidden = false;
+          hrVal.textContent = Math.round(m.hr_bpm);
+          const c = m.hr_confidence || 0;
+          hrDot.className = 'hr-dot ' + (c > 0.75 ? 'good' : c > 0.5 ? 'mid' : '');
+        } else {
+          hrChip.hidden = true;
+        }
+        healthCtrls.hidden = false;
+        if (m && m.state === 'complete' || m && m.state === 'failed' || m && m.state === 'cancelled') {
+          finalizeScan(m);
+        }
+      } catch (e) { hrChip.hidden = true; }
+    }
+
+    scanBtn.addEventListener('click', async () => {
+      healthCard.hidden = true;
+      scanProg.hidden = false;
+      scanPct.textContent = '0';
+      scanBar.style.width = '0%';
+      await fetch('/health/scan', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ window_s: 30 })
+      });
+      if (scanTimer) clearInterval(scanTimer);
+      scanTimer = setInterval(pollScan, 1000);
+    });
+
+    async function pollScan() {
+      try {
+        const m = await (await fetch('/health/scan/status')).json();
+        const target = (m.scan && m.scan.target_s) || 30;
+        const done = (m.scan && m.scan.progress_clean_s) || 0;
+        const pct = Math.min(100, Math.round((done / target) * 100));
+        scanPct.textContent = pct;
+        scanBar.style.width = pct + '%';
+        if (m.state === 'complete' || m.state === 'failed' || m.state === 'cancelled') {
+          finalizeScan(m);
+        }
+      } catch (e) {}
+    }
+
+    function finalizeScan(m) {
+      if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+      scanProg.hidden = true;
+      if (m.state === 'complete') {
+        cardHr.textContent = m.hr_bpm != null ? Math.round(m.hr_bpm) : '--';
+        cardComp.textContent = m.complexion
+          ? (m.complexion.appearance_zh + ' / ' + m.complexion.appearance_en)
+          : '--';
+        cardQ.textContent = 'fps ' + (m.effective_fps || 0);
+        healthCard.hidden = false;
+      } else {
+        scanProg.hidden = false;
+        scanProg.innerHTML = '<div>' + (m.state === 'cancelled' ? '已取消 Cancelled' : '测量失败，请重试 Scan failed, try again') + '</div>';
+      }
+    }
+
     setInterval(pollVideoStatus, 1500);
     setInterval(pollChatbotServer, 4000);
+    setInterval(pollHealth, 1500);
     pollVideoStatus();
     pollChatbotServer();
+    pollHealth();
     setChatbotStatus();
   </script>
 </body>
