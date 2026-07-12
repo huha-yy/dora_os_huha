@@ -45,8 +45,8 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 15b | Real motion + illumination gates | done | `c58c0de` |
 | 16a | Real-face webcam validation | harness ready — **needs a human to run it** | |
 | 16b | On-device FPS budget + e2e | deferred — needs the Orange Pi | |
-| 17 | Monitor UI (HR chip + scan card) | done | `c65ce77`, fixed below |
-| 18 | Config plumbing + docs | done | `c65ce77` |
+| 17 | Monitor UI (HR chip + scan card) | done | `c65ce77`, fixed `2551cc1` `cf1be94` |
+| 18 | Config plumbing + docs | done | `c65ce77`, docs added `cf1be94` |
 
 Test suite currently: **111 passing** (`tests/`).
 
@@ -169,6 +169,40 @@ Two defects reached HEAD as a result, both now fixed:
 
 **Rule: one agent per worktree.** If two must run, give each a git worktree
 (`git worktree add`), or serialise them. Never `git add -A` in a shared tree.
+
+### Audit of Tasks 17/18 (`c65ce77`) — two further gaps, both fixed
+
+Claude audited opencode's work against the plan and spec on 2026-07-12:
+
+- **Task 17 shipped the complexion without its caveat.** Spec §7.3 requires the
+  面色 card to carry one, and `describe_complexion()` has produced it all along
+  ("lighting/WB dependent, not a health indicator") — the UI simply never rendered
+  it. The generic "非医疗设备 / not a medical device" line is a *different* claim: a
+  user shown 面色偏白 reads it as a health signal unless told it is an appearance
+  read that depends on lighting. Fixed in `cf1be94`.
+- **Task 18 step 2 was never done.** The README documentation did not exist; the
+  only "health" hits in it were the orchestrator's pre-existing liveness endpoint.
+  Written in `cf1be94`.
+
+What *did* check out: no forbidden health/wellness/vitality/diagnostic language;
+面色 not 气色; `hr_bpm` null renders `--` not `0`; the `HEALTH_ENABLED=0` kill
+switch fully bypasses the feature and leaves fall detection untouched; face
+detection correctly runs only on processed frames while cheap RGB sampling runs
+every frame.
+
+**Still thin:** the orchestrator has exactly **one** test (`test_health_router.py`)
+covering the whole HealthBus + HTTP router from Task 14. That is well under the
+80% target in AGENTS.md §5. Worth filling before merge.
+
+### The review gate itself was unsound — fixed (`7891667`, `688356f`)
+
+Codex never emits the `VERDICT:` line the prompt asks for, so the hook's *inference*
+path is the normal path, and it had two bugs: it read only `tail -n 80` of a
+4000-line transcript (a long final answer could hide its own findings and be read
+as clean — failing in the dangerous direction), and it aborted genuinely clean
+reviews by trying to pattern-match unbounded praise prose. Now it anchors to the
+`codex` marker, reads the whole final answer, treats zero findings as APPROVED, and
+fails closed when the reviewer bailed out without reviewing.
 
 ---
 
