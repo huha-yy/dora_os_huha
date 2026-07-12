@@ -127,6 +127,7 @@
     .health-card .row { display: flex; justify-content: space-between; margin: 3px 0; }
     .health-card .small { font-size: 12px; opacity: .7; }
     .health-card .disc { margin-top: 6px; font-size: 11px; opacity: .6; }
+    .health-card .caveat { margin: 2px 0 4px; font-size: 11px; opacity: .6; line-height: 1.35; }
 
     .sidebar {
       padding: 0;
@@ -191,6 +192,11 @@
         <div id="health-card" class="health-card" hidden>
           <div class="row"><span>心率 Heart rate</span><b id="card-hr">--</b> BPM</div>
           <div class="row"><span>面色 Complexion</span><b id="card-complexion">--</b></div>
+          <!-- Spec 7.3: the complexion card MUST carry its own caveat. The generic
+               "not a medical device" line below is a different claim -- a user shown
+               "面色偏白" will read it as a health signal unless told it is an
+               appearance read that depends on lighting and white balance. -->
+          <div class="caveat" id="card-complexion-caveat" hidden></div>
           <div class="row small" id="card-quality"><span>质量 Quality</span><span id="card-quality-val">--</span></div>
           <div class="disc">仅供参考，非医疗设备 · For reference only, not a medical device</div>
         </div>
@@ -315,6 +321,7 @@
     const healthCard = document.getElementById('health-card');
     const cardHr = document.getElementById('card-hr');
     const cardComp = document.getElementById('card-complexion');
+    const cardCompCaveat = document.getElementById('card-complexion-caveat');
     const cardQ = document.getElementById('card-quality-val');
     let scanTimer = null;
 
@@ -373,6 +380,13 @@
         cardComp.textContent = m.complexion
           ? (m.complexion.appearance_zh + ' / ' + m.complexion.appearance_en)
           : '--';
+        // The caveat travels with the reading; never show a complexion without it.
+        if (m.complexion && m.complexion.caveat) {
+          cardCompCaveat.textContent = m.complexion.caveat;
+          cardCompCaveat.hidden = false;
+        } else {
+          cardCompCaveat.hidden = true;
+        }
         cardQ.textContent = 'fps ' + (m.effective_fps || 0);
         healthCard.hidden = false;
         scanStatus.hidden = true;

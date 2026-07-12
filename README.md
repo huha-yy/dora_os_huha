@@ -18,6 +18,32 @@ fall events ──────┘        └─ chatbot sidebar
 
 **Optional / in development:** RTAB-Map SLAM, 2D mapping, Nav2 navigation.
 
+### Camera heart-rate readout (rPPG)
+
+A live heart-rate estimate from the face, plus an on-demand 30-second scan with a
+面色 / complexion **appearance** card. Uses classical POS/CHROM remote
+photoplethysmography — CPU-only, no training data, no extra models.
+
+> **仅供参考，非医疗设备 · For reference only, not a medical device.**
+> This is a demo readout, not a health, wellness, or diagnostic feature. Readings
+> depend heavily on lighting, camera white balance, and how still the subject is.
+> The 面色 card describes visual **appearance** only and is not a health indicator.
+
+Heart rate is the only metric produced. Respiratory rate, HRV, and SpO2 appear in
+the message schema but are always `null` and are not implemented. When quality
+gates fail — no face, too small, low FPS, head motion, lighting change — the
+reading is **withheld** (`null`), never guessed.
+
+Disable the feature entirely with `HEALTH_ENABLED=0`; fall detection is untouched
+when it is off. Select the estimator with `HEALTH_BACKEND=pos|chrom` (default `pos`).
+
+```bash
+HEALTH_ENABLED=0 bash scripts/start_dorabot.sh    # run without the health readout
+```
+
+**Not yet validated on real faces or on-device.** See `docs/superpowers/STATE.md`
+(Tasks 16a / 16b) before trusting any number it prints.
+
 See also **[DEPLOYMENT.md](DEPLOYMENT.md)** for platform-specific notes (RK3588 NPU, performance tuning).
 
 ---
