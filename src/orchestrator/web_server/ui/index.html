@@ -184,6 +184,10 @@
           <div>测量中 Measuring… <span id="scan-pct">0</span>%</div>
           <div class="scan-bar"><div class="scan-bar-fill" id="scan-bar-fill" style="width:0%"></div></div>
         </div>
+        <!-- Separate from #scan-progress on purpose: writing the failure text into
+             the progress node would destroy #scan-pct and #scan-bar-fill, which are
+             cached below, leaving a retry updating detached elements. -->
+        <div id="scan-status" class="scan-progress" hidden></div>
         <div id="health-card" class="health-card" hidden>
           <div class="row"><span>心率 Heart rate</span><b id="card-hr">--</b> BPM</div>
           <div class="row"><span>面色 Complexion</span><b id="card-complexion">--</b></div>
@@ -305,6 +309,7 @@
     const healthCtrls = document.getElementById('health-ctrls');
     const scanBtn = document.getElementById('scan-btn');
     const scanProg = document.getElementById('scan-progress');
+    const scanStatus = document.getElementById('scan-status');
     const scanPct = document.getElementById('scan-pct');
     const scanBar = document.getElementById('scan-bar-fill');
     const healthCard = document.getElementById('health-card');
@@ -333,6 +338,7 @@
 
     scanBtn.addEventListener('click', async () => {
       healthCard.hidden = true;
+      scanStatus.hidden = true;   // clear any previous failure/cancel text
       scanProg.hidden = false;
       scanPct.textContent = '0';
       scanBar.style.width = '0%';
@@ -369,9 +375,12 @@
           : '--';
         cardQ.textContent = 'fps ' + (m.effective_fps || 0);
         healthCard.hidden = false;
+        scanStatus.hidden = true;
       } else {
-        scanProg.hidden = false;
-        scanProg.innerHTML = '<div>' + (m.state === 'cancelled' ? '已取消 Cancelled' : '测量失败，请重试 Scan failed, try again') + '</div>';
+        scanStatus.textContent = m.state === 'cancelled'
+          ? '已取消 Cancelled'
+          : '测量失败，请重试 Scan failed, try again';
+        scanStatus.hidden = false;
       }
     }
 

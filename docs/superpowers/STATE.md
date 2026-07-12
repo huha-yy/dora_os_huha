@@ -45,15 +45,18 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 15b | Real motion + illumination gates | done | `c58c0de` |
 | 16a | Real-face webcam validation | harness ready — **needs a human to run it** | |
 | 16b | On-device FPS budget + e2e | deferred — needs the Orange Pi | |
-| 17 | Monitor UI (HR chip + scan card) | done | |
-| 18 | Config plumbing + docs | done | |
+| 17 | Monitor UI (HR chip + scan card) | done | `c65ce77`, fixed below |
+| 18 | Config plumbing + docs | done | `c65ce77` |
 
 Test suite currently: **111 passing** (`tests/`).
 
-**The feature is complete for v1.** Only Tasks 16a/16b remain (webcam harness,
-on-device FPS smoke), and they require hardware a human must run.
-Commit the pending tasks in this session, push to `origin/main`, and file any
-ADVISORY findings as GitHub issues.
+**The code is written, but v1 is NOT validated.** Tasks 16a and 16b both remain,
+and they are the only things that have ever pointed this pipeline at a real human.
+Until 16a passes, "done" means "the tests we wrote pass against the sine waves we
+generated" — it does not mean the feature reads a heart rate.
+
+**Do not push to `main`.** Work stays on `feat/camera-health-metrics` and merges
+via PR (AGENTS.md §5: never commit directly to main).
 
 ---
 
@@ -142,6 +145,30 @@ diagnostic rather than mysterious.
 - End-to-end `/health/metrics` topic + HTTP scan on the robot.
 
 x86 FPS numbers say nothing about the RK3588 — do not substitute one for the other.
+
+---
+
+## Process hazard hit on 2026-07-12 — do not run two agents on one worktree
+
+opencode (Tasks 17/18) and Claude (Task 16a) ran **concurrently in the same
+worktree**. opencode's `git add -A` swept up Claude's *uncommitted, in-progress*
+files — `scripts/validate_rppg_webcam.py` and unsaved STATE.md edits — into
+`c65ce77`, a commit that claims to be about the monitor UI. The review gate then
+fired on the combined diff, so Claude's commit was blocked by defects in
+opencode's code.
+
+Two defects reached HEAD as a result, both now fixed:
+
+1. **UI: destroyed DOM nodes.** `finalizeScan()` wrote the failure text into
+   `#scan-progress` via `innerHTML`, destroying `#scan-pct` and `#scan-bar-fill` —
+   which are cached in `const`s at load. After any failed or cancelled scan, a
+   retry updated **detached elements** and the progress bar silently never moved.
+   Fixed with a separate `#scan-status` element and `textContent`.
+2. **STATE.md told the next agent to push to `origin/main`**, contradicting
+   AGENTS.md §5. Removed.
+
+**Rule: one agent per worktree.** If two must run, give each a git worktree
+(`git worktree add`), or serialise them. Never `git add -A` in a shared tree.
 
 ---
 
