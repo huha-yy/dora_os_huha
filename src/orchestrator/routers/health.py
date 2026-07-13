@@ -12,9 +12,26 @@ MAX_WINDOW_S = 120.0
 
 
 def _idle() -> dict:
-    """A fresh dict each call -- a module-level constant would be handed out by
-    reference and could be mutated by a caller."""
-    return {"schema_version": 1, "state": "idle", "hr_bpm": None, "hr_confidence": None}
+    """The payload served when there is no reading -- no data yet, or perception has
+    gone quiet and its last metrics have expired.
+
+    A fresh dict each call: a module-level constant would be handed out by reference
+    and could be mutated by a caller.
+
+    The unsupported metrics are present and null, exactly as build_metrics() emits
+    them. v1 is heart rate only, and the contract is that these keys ALWAYS exist and
+    are ALWAYS null -- a client must be able to distinguish "not supported" from "key
+    missing because this code path forgot about it".
+    """
+    return {
+        "schema_version": 1,
+        "state": "idle",
+        "hr_bpm": None,
+        "hr_confidence": None,
+        "resp_bpm": None,
+        "hrv_sdnn_ms": None,
+        "spo2_pct": None,
+    }
 
 
 def _parse_window(body: dict | None) -> float:

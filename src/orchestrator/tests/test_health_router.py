@@ -115,11 +115,19 @@ def test_hr_is_null_not_zero_when_there_is_no_reading(client):
 # v1 is heart rate only
 # --------------------------------------------------------------------------
 
-def test_idle_payload_never_advertises_unsupported_metrics(client):
-    body = client.get("/health/live").json()
+@pytest.mark.parametrize("path", ["/health/live", "/health/scan/status"])
+def test_unsupported_metrics_are_present_and_null(client, path):
+    """The contract is that these keys ALWAYS exist and are ALWAYS null -- a client
+    must be able to tell "not supported" apart from "this code path forgot the key".
+
+    Asserting presence, not just `body.get(k) is None`: `.get()` returns None for a
+    MISSING key too, so that weaker form passes against a payload that omits them
+    entirely -- which is exactly the bug this guards."""
+    body = client.get(path).json()
 
     for unsupported in ("resp_bpm", "hrv_sdnn_ms", "spo2_pct"):
-        assert body.get(unsupported) is None
+        assert unsupported in body, f"{path} omits {unsupported}"
+        assert body[unsupported] is None, f"{path} populated {unsupported}"
 
 
 # --------------------------------------------------------------------------
