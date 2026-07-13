@@ -190,9 +190,31 @@ switch fully bypasses the feature and leaves fall detection untouched; face
 detection correctly runs only on processed frames while cheap RGB sampling runs
 every frame.
 
-**Still thin:** the orchestrator has exactly **one** test (`test_health_router.py`)
-covering the whole HealthBus + HTTP router from Task 14. That is well under the
-80% target in AGENTS.md §5. Worth filling before merge.
+### Orchestrator test gap — filled (`7db45af`, `610a462`). It was hiding three bugs.
+
+Task 14 shipped with **one** test for the whole HealthBus + HTTP router. Writing the
+missing ones (1 → 29) surfaced three defects:
+
+1. **[P1] Stale vital signs served as live.** `HealthBus` never expired anything and
+   the ROS bridge only ever calls `set_metrics()`. If perception crashed, ROS
+   disconnected, or the camera was unplugged, `/health/live` kept serving the last
+   heart rate **forever** and the UI kept rendering it as current. The perception
+   node's own 5s frame-staleness guard does not cover this — it only runs while that
+   node is alive and publishing, so node death defeats it entirely. Metrics are now
+   stamped on arrival with a **monotonic** clock (an NTP step must not make a stale
+   reading look fresh) and withheld past `METRICS_TTL_S = 5.0`.
+2. **[P2] `window_s` was silently ignored.** The API accepted it, the bus carried it,
+   the ROS topic shipped it — and `_on_scan_cmd` used the configured 30s anyway. A
+   60s scan silently ran for 30s. `ScanController.start()` now takes a per-scan
+   override, reset each start so one scan's window cannot leak into the next.
+3. **[P2] No input validation.** `{"window_s": "abc"}` was a 500; negatives and
+   absurd values were forwarded to perception. Now bounded 5–120s with a 422.
+   NaN/Infinity too — strict JSON cannot encode them, but `json.loads` accepts the
+   literals, so a real client can send them.
+
+Codex then caught a **weak test of mine**: `body.get(k) is None` also passes when the
+key is *missing*, so it did not notice that the idle payload omitted the null
+`resp_bpm`/`hrv_sdnn_ms`/`spo2_pct` stubs the v1 contract requires. Fixed both.
 
 ### The review gate itself was unsound — fixed (`7891667`, `688356f`)
 
