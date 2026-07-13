@@ -119,10 +119,22 @@ class BodyTrackingNode(Node):
         self.node_up_time = datetime.now().timestamp()
         self.mock_fall_detection = mock_fall_detection
         # --- Health metrics (rPPG) ---
-        self.health_config = HealthConfig.from_dict({
-            "enabled": os.getenv("HEALTH_ENABLED", "1") != "0",
-            "backend": os.getenv("HEALTH_BACKEND", "pos"),
-        })
+        # A bad health config must never take down this node: it also runs
+        # safety-critical fall detection. HealthConfig.from_dict is strict by design
+        # (a typo'd gate key is a safety bug, so it raises) -- but the right response
+        # to a bad HEALTH_BACKEND is a loud log and a disabled demo feature, not a
+        # dead fall detector.
+        try:
+            self.health_config = HealthConfig.from_dict({
+                "enabled": os.getenv("HEALTH_ENABLED", "1") != "0",
+                "backend": os.getenv("HEALTH_BACKEND", "pos"),
+            })
+        except ValueError as exc:
+            self.get_logger().error(
+                f"Invalid health config ({exc}). Health metrics DISABLED; "
+                f"fall detection continues."
+            )
+            self.health_config = HealthConfig(enabled=False)
         self._health_last_roi = None
         self._health_last_mean = None
         self._health_roi_age = 999

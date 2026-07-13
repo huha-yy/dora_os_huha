@@ -81,7 +81,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
     print(f"\n{'=' * 72}\n  {banner}\n{'=' * 72}")
     t_end = time.monotonic() + seconds
     last_print = 0.0
-    reasons, hrs, frame_costs = Counter(), [], []
+    reasons, hrs, confs, frame_costs = Counter(), [], [], []
 
     while time.monotonic() < t_end:
         ok, frame = cap.read()
@@ -110,8 +110,12 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
         est = rppg.estimate(now, cfg.ambient_window_s, gate_ok=gate.ok)
 
         reasons[gate.reason or "PASS"] += 1
-        if gate.ok and est.hr_bpm is not None:
-            hrs.append(est.hr_bpm)
+        # Record confidence whenever the OTHER gates passed -- that is the population
+        # the confidence gate is deciding on. (est is None-ish when the gate failed.)
+        if gate.ok:
+            confs.append(est.confidence)
+            if est.hr_bpm is not None:
+                hrs.append(est.hr_bpm)
 
         if now - last_print >= 1.0:
             last_print = now
@@ -127,7 +131,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
                 f"| HR {hr} ({conf}) | {gate.reason or 'PASS'}"
             )
 
-    return {"label": label, "reasons": reasons, "hrs": hrs,
+    return {"label": label, "reasons": reasons, "hrs": hrs, "confs": confs,
             "cost_ms": float(np.mean(frame_costs)) if frame_costs else 0.0}
 
 
@@ -180,6 +184,24 @@ def main() -> int:
         print("  PHASE 1: NO readings passed the gates. Why they were withheld:")
         for reason, n in still["reasons"].most_common():
             print(f"           {n:5d}x  {reason}")
+
+    # The confidence distribution is the whole ballgame. Synthetic pure noise scores
+    # up to ~0.64 (p99) and an ordinary 1% pulse scores ~0.85+, which is why the gate
+    # sits at min_confidence. What we do NOT know until this script runs is where a
+    # REAL face lands. If real confidence clusters below the gate, the gate is too
+    # strict for this camera and lighting; if it sits in the noise band, the reading
+    # is not trustworthy no matter what number it prints.
+    confs = np.array(still["confs"]) if still["confs"] else np.array([])
+    print()
+    if confs.size:
+        print(f"  CONFIDENCE on a real face (gate = {cfg.gates.min_confidence}):")
+        print(f"           median {np.median(confs):.3f}   p05 {np.percentile(confs, 5):.3f}   "
+              f"max {confs.max():.3f}")
+        print(f"           cleared the gate: {100.0 * (confs >= cfg.gates.min_confidence).mean():.0f}% "
+              f"of windows")
+        print(f"           for scale -- synthetic noise p99 ~0.64, a clean 1% pulse ~0.85+")
+    else:
+        print("  CONFIDENCE: no windows produced an estimate at all.")
 
     moved_rejected = moving["reasons"].get("head_motion", 0)
     total_moving = sum(moving["reasons"].values()) or 1
