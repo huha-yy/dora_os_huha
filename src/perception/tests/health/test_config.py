@@ -93,3 +93,27 @@ def test_valid_config_still_round_trips():
 
 def test_empty_dict_gives_defaults():
     assert HealthConfig.from_dict({}) == HealthConfig.default()
+
+
+@pytest.mark.parametrize("bad", [
+    {"max_motion": float("nan")},
+    {"max_illum_delta": float("inf")},
+    {"min_confidence": float("nan")},
+    {"min_fps": float("nan")},
+])
+def test_non_finite_gate_values_raise(bad):
+    """NaN defeats a gate silently: `motion > nan` is False, so the gate NEVER fires.
+    Infinity does the same. Either would reopen the phantom-heart-rate hole that
+    test_noise_rejection.py exists to close -- range checks alone do not catch them,
+    because every comparison against NaN is False."""
+    with pytest.raises(ValueError):
+        Gates.from_dict(bad)
+
+
+@pytest.mark.parametrize("bad", [
+    {"ambient_window_s": float("nan")},
+    {"scan_window_s": float("inf")},
+])
+def test_non_finite_windows_raise(bad):
+    with pytest.raises(ValueError):
+        HealthConfig.from_dict(bad)

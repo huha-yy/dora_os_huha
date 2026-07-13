@@ -7,6 +7,7 @@ back to a default: someone who tightened `min_confidence` to 0.9 and typo'd the 
 would otherwise be running 0.70 with no way to find out.
 """
 
+import math
 from dataclasses import dataclass, field, fields
 from difflib import get_close_matches
 from typing import Any, Mapping
@@ -27,7 +28,20 @@ def _reject_unknown(d: Mapping[str, Any], known: set, where: str) -> None:
 
 
 def _check(name: str, value: float, lo: float, hi: float, *, lo_open: bool = False) -> float:
-    v = float(value)
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+
+    # Non-finite FIRST: a range check cannot catch NaN, because every comparison
+    # against it is False. A NaN threshold silently DISABLES its gate -- `motion > nan`
+    # never trips -- which would quietly reopen the phantom-heart-rate hole that
+    # min_confidence and test_noise_rejection.py exist to close. Infinity does the
+    # same. This is the exact failure mode the gates are here to prevent, so it must
+    # be rejected loudly rather than range-checked.
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be finite, got {v}")
+
     below = v <= lo if lo_open else v < lo
     if below or v > hi:
         bound = f"({lo}, {hi}]" if lo_open else f"[{lo}, {hi}]"
