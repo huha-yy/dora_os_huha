@@ -256,19 +256,75 @@ citing the plan.** Escalate to the human instead (AGENTS.md §6).
 
 ---
 
-## Deferred minor findings (triage before merge)
+## THE BIG ONE — pure noise was publishing a heart rate (~20% of windows)
 
-- **T13:** the node reaches into `self._rppg._buffer` (a private attribute) to
-  recompute the window for the drop/jitter gates. Give `RppgEstimator` a public
-  accessor.
-- T1: `test_rgb_sample_is_immutable_*` never asserts `FrozenInstanceError`;
-  `test_gate_result_defaults` never exercises the `default_factory` default.
-- T2: `effective_fps`'s `span <= 0` guard is dead code now that `append()`
-  enforces strict monotonicity; its test doesn't actually reach it.
-- T4: `alpha = std(a)/(std(b)+1e-8)` can blow up when `std(b)` is tiny-but-nonzero;
-  no cross-check that `ts.size == rgb.shape[0]`.
-- T5: `HealthConfig.from_dict` silently drops unknown keys (a typo like `min_fp`
-  quietly uses the default — bad for safety-relevant gate tuning). No value
-  validation (backend isn't restricted to pos/chrom; negative windows accepted).
+Found on 2026-07-12 while triaging the deferred findings below. This was the most
+serious defect in the project and **nothing in 120 tests caught it**, because every
+test fed the estimator a pulse and checked it recovered it. Nothing tested the
+opposite and far more dangerous case: **feed it no pulse and see whether it invents
+one.** It did.
+
+Measured over 400 trials of pure Gaussian noise, 10s window:
+
+| | confidence |
+|---|---|
+| pure noise | mean **0.44**, p99 **0.64**, max 0.73 |
+| a real 1% pulse | p01 **0.85**, min 0.82 |
+| **`min_confidence` gate** | **0.50 — inside the noise distribution** |
+
+Confidence never approaches zero for noise: `0.5*snr/(snr+4) + 0.5*dominance` has a
+floor near 0.44, because a random spectrum still has *some* peak in the 0.7–4 Hz band
+and dominance rewards it. The gate wasn't separating signal from noise — it was
+cutting through the middle of the noise.
+
+**Not theoretical.** Every other gate (face present, size, FPS, motion, illumination)
+passes happily for a real, still, well-lit face whose rPPG signal is simply too weak
+to recover — poor light, an unlucky skin tone, a camera with aggressive denoising.
+That window *is* noise, and it was ~1-in-5 to show a confident phantom heart rate.
+
+**Gate raised 0.50 → 0.70** (`e195075`), sited from data, not guessed:
+
+| gate | phantom-HR rate | accepts a weak 0.5% pulse |
+|---|---|---|
+| 0.50 | **16.7%** | 100% |
+| 0.60 | 2.0% | 99% |
+| **0.70** | **0.25%** | 89% (POS) / 99% (CHROM) |
+| 0.80 | 0.00% | 36% |
+
+`tests/health/test_noise_rejection.py` pins the phantom rate, the sensitivity, **and
+the separation itself**, so a change to the confidence formula cannot quietly erase
+the gap the gate depends on.
+
+> **The gate is sited against SYNTHETIC pulses.** Where a *real* face lands is still
+> unknown — that is **Task 16a**. The webcam harness now reports the confidence
+> distribution against the gate, so that run answers it directly. If real faces
+> cluster below 0.70, tune with real data. **Do not go back to 0.50.**
+
+---
+
+## Deferred minor findings — triaged 2026-07-12
+
+- **T13 — FIXED** (`c58c0de`). The node no longer reaches into `_rppg._buffer`;
+  `RPPGEstimator.window()` is public.
+- **T5 — FIXED** (`e195075`, `4fa5c9f`). Config carries the quality gates, so a
+  mistake there is a *safety* bug: someone tightening `min_confidence` to 0.9 who
+  typo'd the key was silently running the default with no way to find out.
+  `from_dict` now rejects unknown keys (with a did-you-mean), unknown backends,
+  out-of-range gates, non-positive windows, and **non-finite values** — a `NaN`
+  threshold silently *disables* its gate, since `motion > nan` never trips
+  (demonstrated: `max_motion=NaN` lets `motion=999` pass cleanly). Because
+  `from_dict` is now strict, the node guards its own construction: a bad
+  `HEALTH_BACKEND` logs loudly and disables the health feature rather than raising
+  and taking down the node that also runs **safety-critical fall detection**. A demo
+  feature must never kill the safety feature.
+- **T4 — DISMISSED after investigation.** The premise was wrong. `alpha·s2` cannot
+  blow up: `alpha = std(s1)/std(s2)` makes `std(alpha·s2)` bounded by `std(s1)` by
+  construction, and any DC term is removed by the bandpass. The `ts`/`rgb` length
+  mismatch already raises loudly from numpy. No change — but the probe written to
+  test it is what surfaced the noise-gate bug above.
+- **T1, T2 — open, low value.** Weak assertions in `test_rgb_sample_is_immutable_*`
+  and `test_gate_result_defaults`; `effective_fps`'s `span <= 0` guard is dead code
+  now that `append()` enforces strict monotonicity. Cosmetic; safe to merge with
+  these open.
 - **Process:** the Coder did not update STATE.md after each task as instructed
   (tasks 11–15 landed with STATE.md untouched). Reconciled manually on 2026-07-12.
