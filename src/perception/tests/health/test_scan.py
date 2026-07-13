@@ -121,3 +121,53 @@ def test_restart_while_running_resets_progress_and_adopts_new_id():
     assert sc.progress_clean_s == 0.0
     assert sc.measurement_id == "m11"
     assert sc.state == ScanState.WARMING
+
+
+# --------------------------------------------------------------------------
+# per-scan window override
+#
+# Regression: the HTTP API accepted window_s, the orchestrator plumbed it through
+# the bus and the ROS topic, and the node then ignored it and used its configured
+# default. A user who asked for a 60s scan silently got a 30s one.
+# --------------------------------------------------------------------------
+
+def test_start_honours_a_requested_target():
+    sc = ScanController(target_clean_s=30.0, timeout_s=300.0, warmup_s=0.0)
+    sc.start("m1", now=0.0, target_clean_s=10.0)
+
+    t = 0.0
+    for _ in range(10):          # 10 clean seconds, driven at 1 Hz
+        t += 1.0
+        sc.update(t, gate_ok=True)
+
+    assert sc.state == ScanState.COMPLETE, "the 10s override was ignored"
+
+
+def test_start_without_an_override_uses_the_configured_target():
+    sc = ScanController(target_clean_s=30.0, timeout_s=300.0, warmup_s=0.0)
+    sc.start("m1", now=0.0)
+
+    t = 0.0
+    for _ in range(10):
+        t += 1.0
+        sc.update(t, gate_ok=True)
+
+    assert sc.state != ScanState.COMPLETE, "completed at 10s but the target is 30s"
+
+
+def test_a_later_scan_does_not_inherit_the_previous_override():
+    """The override is per-scan. A 10s scan must not silently shorten the next one."""
+    sc = ScanController(target_clean_s=30.0, timeout_s=300.0, warmup_s=0.0)
+    sc.start("m1", now=0.0, target_clean_s=10.0)
+    t = 0.0
+    for _ in range(10):
+        t += 1.0
+        sc.update(t, gate_ok=True)
+    assert sc.state == ScanState.COMPLETE
+
+    sc.start("m2", now=t)        # no override -- back to the configured 30s
+    for _ in range(10):
+        t += 1.0
+        sc.update(t, gate_ok=True)
+
+    assert sc.state != ScanState.COMPLETE, "the previous scan's 10s target leaked"

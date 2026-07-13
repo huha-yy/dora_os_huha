@@ -403,7 +403,16 @@ class BodyTrackingNode(Node):
         action = cmd.get("action")
         if action == "start":
             mid = cmd.get("measurement_id") or str(uuid.uuid4())
-            self._scan.start(mid, now)
+            # Honour the requested window. The orchestrator validates it (5-120s);
+            # anything unusable here falls back to the configured target rather than
+            # silently running a scan of a length nobody asked for.
+            try:
+                window_s = float(cmd.get("window_s"))
+            except (TypeError, ValueError):
+                window_s = None
+            if window_s is not None and not (0.0 < window_s <= 600.0):
+                window_s = None
+            self._scan.start(mid, now, target_clean_s=window_s)
         elif action == "cancel":
             self._scan.cancel(now)
 

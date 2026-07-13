@@ -50,7 +50,8 @@ class ScanController:
         warmup_s: float = 2.0,
         max_dt_s: float = 2.0,
     ) -> None:
-        self._target = float(target_clean_s)
+        self._default_target = float(target_clean_s)
+        self._target = self._default_target
         self._timeout = float(timeout_s)
         self._warmup = float(warmup_s)
         self._max_dt = float(max_dt_s)
@@ -72,12 +73,26 @@ class ScanController:
     def measurement_id(self) -> Optional[str]:
         return self._mid
 
-    def start(self, measurement_id: str, now: float) -> None:
+    def start(
+        self,
+        measurement_id: str,
+        now: float,
+        target_clean_s: Optional[float] = None,
+    ) -> None:
+        """Begin a scan.
+
+        `target_clean_s` overrides the configured target for THIS scan only. The HTTP
+        API lets the caller ask for a window, and that request used to be plumbed all
+        the way to this class and then dropped -- so a 60s scan silently ran for the
+        configured 30s. Resetting it on every start keeps the override per-scan and
+        stops one scan's window leaking into the next.
+        """
         self._state = ScanState.WARMING
         self._clean = 0.0
         self._mid = measurement_id
         self._start_t = now
         self._last_t = now
+        self._target = float(target_clean_s) if target_clean_s else self._default_target
 
     def cancel(self, now: float) -> None:
         if self._state in (ScanState.WARMING, ScanState.COLLECTING, ScanState.INSUFFICIENT_QUALITY):
