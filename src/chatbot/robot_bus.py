@@ -26,3 +26,8 @@ def publish_cmd_vel(vx: float, vy: float, wz: float):
 def publish_head_cmd(action: str):
     _ros2_cmd(f"ros2 topic pub --once /head_cmd std_msgs/msg/String \"{{data: '{action}'}}\"")
     logger.debug(f"[RobotBus] /head_cmd: {action}")
+
+
+def publish_arm_cmd(action: str):
+    _ros2_cmd(f"ros2 topic pub --once /arm_cmd std_msgs/msg/String \"{{data: '{action}'}}\"")
+    logger.debug(f"[RobotBus] /arm_cmd: {action}")
