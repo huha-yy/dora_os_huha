@@ -56,6 +56,53 @@ from body_tracking.health.roi import roi_centroid, roi_pixel_count, sample_mean_
 from body_tracking.health.roi_detector import FaceRoiExtractor  # noqa: E402
 
 
+class WebcamSource:
+    """A plain V4L2 webcam.
+
+    Wrapped rather than used directly: `cv2.VideoCapture` is a C extension type and
+    rejects arbitrary attributes, so `exposure_stable` cannot be stapled onto it.
+    """
+
+    def __init__(self, index: int, width: int = 640, height: int = 480):
+        self.cap = cv2.VideoCapture(index)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"cannot open /dev/video{index}")
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+        # BOTH controls, and both verified by reading back.
+        #
+        # Auto-WHITE-BALANCE is the one that matters most here and is the easiest to
+        # forget: it re-mixes R/G/B while holding brightness roughly constant, which is
+        # invisible to a luminance check and is exactly what POS/CHROM read. Locking
+        # only auto-exposure and calling the camera "stable" would let this harness
+        # validate a heart rate computed from AWB drift. Measured on the D415, that
+        # drift reaches 7.5% against a ~1% pulse.
+        # V4L2: exposure 1 == manual, 3 == auto.  auto_wb 0 == off, 1 == on.
+        #
+        # BOTH conditions are required: set() must report success AND the readback must
+        # match. A readback alone fails OPEN for AUTO_WB, because OpenCV returns 0.0 for
+        # an UNSUPPORTED property -- which is exactly the "off" value we want. A webcam
+        # with no AWB control at all would then read back as successfully locked while
+        # its white balance kept hunting.
+        ae_locked = (self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                     and self.cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) == 1)
+        awb_locked = (self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+                      and self.cap.get(cv2.CAP_PROP_AUTO_WB) == 0)
+
+        self.exposure_stable = bool(ae_locked and awb_locked)
+        self.lock_failures = [
+            name for name, ok in (("auto_exposure", ae_locked), ("auto_white_balance", awb_locked))
+            if not ok
+        ]
+
+    def read(self):
+        return self.cap.read()
+
+    def release(self):
+        self.cap.release()
+
+
 class RealSenseSource:
     """The production camera. Optionally locks AE/AWB, which is what a scan does.
 
@@ -209,20 +256,17 @@ def main() -> int:
         cap = RealSenseSource(lock=not args.no_lock)
         print(f"source: RealSense D415  (AE/AWB {'LOCKED' if not args.no_lock else 'AUTO'})")
     else:
-        cap = cv2.VideoCapture(args.camera)
-        if not cap.isOpened():
-            print(f"cannot open /dev/video{args.camera}")
+        try:
+            cap = WebcamSource(args.camera)
+        except RuntimeError as exc:
+            print(exc)
             return 2
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        # V4L2: 1 == manual exposure, 3 == aperture-priority (auto). Verify, do not assume.
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        cap.exposure_stable = cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) == 1
         print(f"source: /dev/video{args.camera} (webcam)  "
-              f"AE lock {'OK' if cap.exposure_stable else 'FAILED -> readings withheld'}")
+              f"AE+AWB lock {'OK' if cap.exposure_stable else 'FAILED -> readings withheld'}")
         if not cap.exposure_stable:
-            print("  A webcam that will not hold its exposure cannot give a trustworthy "
-                  "reading. Use --realsense.")
+            print(f"  could not lock: {', '.join(cap.lock_failures)}")
+            print("  A camera that will not hold its exposure AND white balance cannot give "
+                  "a trustworthy reading. Use --realsense.")
 
     cfg = HealthConfig.default()
     extractor = FaceRoiExtractor()
