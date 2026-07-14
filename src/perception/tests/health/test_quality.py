@@ -7,7 +7,8 @@ def _good():
     return {
         "face_present": True, "single_target": True, "roi_in_bounds": True,
         "face_px": 180, "roi_px": 6000, "effective_fps": 25.0, "drop_ratio": 0.02,
-        "jitter_ms": 5.0, "motion": 0.01, "illum_delta": 0.05, "exposure_stable": True,
+        "jitter_ms": 5.0, "motion": 0.01, "illum_delta": 0.05, "chroma_drift": 0.002,
+        "exposure_stable": True,
     }
 
 
@@ -48,6 +49,7 @@ def test_components_are_echoed():
     ("jitter_ms", "timestamp_jitter"),
     ("motion", "head_motion"),
     ("illum_delta", "illumination_change"),
+    ("chroma_drift", "white_balance_drift"),
     ("exposure_stable", "exposure_unstable"),
 ])
 def test_omitted_key_causes_rejection(key_to_omit: str, expected_reason: str):

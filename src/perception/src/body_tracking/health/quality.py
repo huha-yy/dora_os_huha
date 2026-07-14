@@ -37,6 +37,7 @@ def evaluate_gates(components: dict, gates: Gates) -> GateResult:
         (c.get("jitter_ms", 1e9) > gates.max_jitter_ms, "timestamp_jitter"),
         (c.get("motion", 1e9) > gates.max_motion, "head_motion"),
         (c.get("illum_delta", 1e9) > gates.max_illum_delta, "illumination_change"),
+        (c.get("chroma_drift", 1e9) > gates.max_chroma_drift, "white_balance_drift"),
         (not c.get("exposure_stable", False), "exposure_unstable"),
     ]
     for failed, reason in checks:

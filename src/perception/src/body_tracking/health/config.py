@@ -58,6 +58,20 @@ class Gates:
     max_jitter_ms: float = 20.0
     max_motion: float = 0.05
     max_illum_delta: float = 0.15
+    # Auto-white-balance detector. Squeezed from BOTH sides -- the gap is narrow, and
+    # measured on the real D415 (2026-07-14):
+    #
+    #   a real pulse itself moves R/G and B/G by  0.56% (0.5% pulse) .. 1.20% (2% pulse)
+    #   a settled camera (locked or auto)          0.08% .. 0.22%
+    #   a severe AWB transient                     7.48%   <- 6x the strongest pulse
+    #
+    # The pulse IS a chrominance modulation -- that is what POS/CHROM extract -- so a
+    # tighter gate would reject the very signal it protects. 3% sits clear of the
+    # strongest pulse and well under a real transient. It catches CATASTROPHIC AWB
+    # hunting, not mild drift; mild drift is handled by locking the camera during a
+    # scan (health/camera.py). illum_delta cannot cover this: AWB holds luminance
+    # roughly constant while re-mixing the channels.
+    max_chroma_drift: float = 0.03
     # Do NOT lower this without rerunning tests/health/test_noise_rejection.py.
     #
     # Confidence does not go to zero for noise: `0.5*snr/(snr+4) + 0.5*dominance` has
@@ -79,7 +93,8 @@ class Gates:
             _check("min_confidence", d["min_confidence"], 0.0, 1.0)
         if "max_drop_ratio" in d:
             _check("max_drop_ratio", d["max_drop_ratio"], 0.0, 1.0)
-        for key in ("min_fps", "max_jitter_ms", "max_motion", "max_illum_delta"):
+        for key in ("min_fps", "max_jitter_ms", "max_motion", "max_illum_delta",
+                    "max_chroma_drift"):
             if key in d:
                 _check(key, d[key], 0.0, float("inf"))
         for key in ("min_face_px", "min_roi_px"):

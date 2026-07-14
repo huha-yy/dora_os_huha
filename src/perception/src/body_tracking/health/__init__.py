@@ -7,11 +7,13 @@ from .scan import ScanController
 from .messages import build_metrics, SCHEMA_VERSION
 from .complexion import describe_complexion
 from .quality import evaluate_gates
-from .artifacts import motion_metric, illumination_metric, FAIL_CLOSED
+from .artifacts import motion_metric, illumination_metric, chroma_drift_metric, FAIL_CLOSED
+from .camera import lock_color_sensor, LockResult
 
 __all__ = [
     "HealthConfig", "Gates", "RgbSample", "PulseEstimate", "ScanState", "GateResult",
     "RPPGEstimator", "ScanController", "build_metrics", "SCHEMA_VERSION",
     "describe_complexion", "evaluate_gates",
-    "motion_metric", "illumination_metric", "FAIL_CLOSED",
+    "motion_metric", "illumination_metric", "chroma_drift_metric", "FAIL_CLOSED",
+    "lock_color_sensor", "LockResult",
 ]

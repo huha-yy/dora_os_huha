@@ -14,6 +14,7 @@ import pytest
 
 from body_tracking.health.artifacts import (
     FAIL_CLOSED,
+    chroma_drift_metric,
     illumination_metric,
     motion_metric,
 )
@@ -210,3 +211,95 @@ def test_metrics_never_return_nan(metric):
     ]
     for win in degenerate:
         assert not math.isnan(metric(win))
+
+
+# --------------------------------------------------------------------------
+# chrominance drift -- the AWB blind spot
+#
+# Measured on the real D415 (2026-07-14): after any auto-white-balance event the B/G
+# ratio drifts up to 7.5% for ~5 seconds. illum_delta CANNOT see this -- AWB re-mixes
+# R/G/B while holding brightness roughly constant, so a luminance metric is blind to
+# it by construction. And POS/CHROM consume precisely those ratios.
+#
+# The threshold is bounded from BOTH sides and the gap is narrow:
+#   a real pulse itself moves B/G by 0.56% (0.5% pulse) to 1.20% (2% pulse)
+#     -- gate below that and we reject the signal we exist to measure
+#   a settled camera, locked or auto:  0.08 - 0.22%
+#   a severe AWB transient:            7.48%   <- 6x the strongest pulse
+# --------------------------------------------------------------------------
+
+def _rgb_samples(r, g, b):
+    n = len(r)
+    return [RgbSample(t=i / 30.0, r=r[i], g=g[i], b=b[i],
+                      cx=320.0, cy=240.0, w=150.0) for i in range(n)]
+
+
+def _pulse(amp, n=300, seed=0):
+    t = np.arange(n) / 30.0
+    p = amp * np.sin(2 * np.pi * 1.2 * t)
+    rng = np.random.default_rng(seed)
+    return _rgb_samples(128 * (1 + 0.3 * p) + rng.normal(0, 0.5, n),
+                        128 * (1 + 1.0 * p) + rng.normal(0, 0.5, n),
+                        128 * (1 + 0.2 * p) + rng.normal(0, 0.5, n))
+
+
+def test_a_real_pulse_is_not_mistaken_for_chrominance_drift():
+    """DISCRIMINATIVE. POS/CHROM read the pulse OUT of the chrominance, so a strong
+    pulse necessarily moves B/G. A gate that rejects it has destroyed the feature."""
+    for amp in (0.005, 0.01, 0.02):
+        assert chroma_drift_metric(_pulse(amp)) < GATES.max_chroma_drift, (
+            f"a {amp*100:.1f}% pulse was rejected as chrominance drift"
+        )
+
+
+def test_a_settled_camera_passes():
+    """D415, locked or settled-auto: B/G CoV 0.08-0.22%."""
+    rng = np.random.default_rng(1)
+    n = 300
+    base = 128.0
+    win = _rgb_samples(base + rng.normal(0, 0.3, n),
+                       base + rng.normal(0, 0.3, n),
+                       base + rng.normal(0, 0.3, n))
+
+    assert chroma_drift_metric(win) < GATES.max_chroma_drift
+
+
+def test_an_auto_white_balance_transient_is_rejected():
+    """The real failure: AWB ramps the blue gain over the window. Reproduces the 7.5%
+    B/G excursion measured on the D415 from a cold start."""
+    n = 300
+    ramp = np.linspace(1.0, 1.16, n)     # blue gain drifting as AWB hunts
+    win = _rgb_samples(np.full(n, 128.0), np.full(n, 128.0), 128.0 * ramp)
+
+    assert chroma_drift_metric(win) > GATES.max_chroma_drift, (
+        "an auto-white-balance transient was accepted -- this is the case illum_delta "
+        "cannot see, and it swamps the pulse"
+    )
+
+
+def test_illum_delta_really_is_blind_to_it():
+    """Pins the premise. If this ever fails, illum_delta covers AWB drift after all and
+    the chroma gate is redundant -- but it does not, because AWB holds luminance
+    roughly constant while re-mixing the channels."""
+    n = 300
+    # Blue up, red down: the channel MIX changes, mean luminance barely moves.
+    win = _rgb_samples(128.0 * np.linspace(1.0, 0.88, n),
+                       np.full(n, 128.0),
+                       128.0 * np.linspace(1.0, 1.12, n))
+
+    assert illumination_metric(win) < GATES.max_illum_delta, "premise broken"
+    assert chroma_drift_metric(win) > GATES.max_chroma_drift, (
+        "the chroma gate must catch what illum_delta cannot"
+    )
+
+
+@pytest.mark.parametrize("win", [
+    [],
+    _rgb_samples([128.0], [128.0], [128.0]),                       # single sample
+    _rgb_samples([128.0] * 5, [0.0] * 5, [128.0] * 5),             # green channel zero
+])
+def test_chroma_drift_fails_closed(win):
+    """0.0 would PASS the gate. Degenerate input must fail it."""
+    value = chroma_drift_metric(win)
+    assert not math.isnan(value)
+    assert value > GATES.max_chroma_drift

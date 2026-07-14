@@ -15,7 +15,8 @@ from tqdm import tqdm
 from .body_detector import BodyDetector
 from .health import (
     RPPGEstimator, ScanController, HealthConfig, RgbSample, ScanState, build_metrics,
-    describe_complexion, evaluate_gates, motion_metric, illumination_metric, FAIL_CLOSED,
+    describe_complexion, evaluate_gates, motion_metric, illumination_metric,
+    chroma_drift_metric, FAIL_CLOSED,
 )
 from .health.roi_detector import FaceRoiExtractor
 from .health.roi import sample_mean_rgb, roi_pixel_count, roi_centroid
@@ -448,11 +449,13 @@ class BodyTrackingNode(Node):
             jitter_ms = 999.0
             motion = FAIL_CLOSED
             illum_delta = FAIL_CLOSED
+            chroma_drift = FAIL_CLOSED
         else:
             fps = self._rppg.effective_fps(self._health_last_frame_t, window_s)
             win = self._rppg.window(self._health_last_frame_t, window_s)
             motion = motion_metric(win)
             illum_delta = illumination_metric(win)
+            chroma_drift = chroma_drift_metric(win)
             if len(win) >= 2:
                 intervals = np.diff([s.t for s in win])
                 jitter_ms = float(np.std(intervals)) * 1000.0 if len(intervals) > 1 else 0.0
@@ -475,6 +478,11 @@ class BodyTrackingNode(Node):
             "jitter_ms": jitter_ms,
             "motion": motion,
             "illum_delta": illum_delta,
+            # illum_delta is BLIND to auto-white-balance drift: AWB re-mixes R/G/B
+            # while holding brightness roughly constant, and POS/CHROM read exactly
+            # those ratios. Measured on the D415: a cold AWB transient drove B/G 7.5%
+            # while illum_delta stayed UNDER its gate. This is that gate.
+            "chroma_drift": chroma_drift,
             # TODO(Task 16): report the real RealSense exposure/WB lock state. Until
             # then illum_delta above catches the observable symptom of exposure
             # hunting (luminance drift). Tracked as a known gap in STATE.md.

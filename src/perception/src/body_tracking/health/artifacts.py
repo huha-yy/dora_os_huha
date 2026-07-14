@@ -61,6 +61,57 @@ def motion_metric(samples: Sequence[RgbSample]) -> float:
     return motion if np.isfinite(motion) else FAIL_CLOSED
 
 
+def chroma_drift_metric(samples: Sequence[RgbSample]) -> float:
+    """Drift in the CHANNEL RATIOS over the window -- the auto-white-balance detector.
+
+        chroma_drift = max( CoV(R/G), CoV(B/G) )
+
+    Why this exists as a separate gate: `illumination_metric` cannot see AWB drift.
+    Auto-white-balance re-mixes R/G/B while holding overall brightness roughly
+    constant, so a *luminance* metric is blind to it by construction -- and POS/CHROM
+    consume precisely those ratios. Measured on the D415 (2026-07-14): a cold AWB
+    transient drove B/G by 7.5% while illum_delta peaked at 0.117, UNDER its 0.15 gate.
+    The window passed. That is the hole this closes.
+
+    The threshold is squeezed from both sides and the gap is narrow, so read
+    Gates.max_chroma_drift before touching it:
+
+        a real pulse itself       0.56% (0.5% pulse) .. 1.20% (2% pulse)
+        settled camera            0.08% .. 0.22%
+        severe AWB transient      7.48%
+
+    The pulse *is* a chrominance modulation -- that is what POS/CHROM extract -- so a
+    tighter gate would reject the signal it exists to protect. This therefore catches
+    catastrophic AWB hunting, NOT mild drift (the 2-12s tail of a transient sits at
+    ~0.98%, inside the pulse range and genuinely indistinguishable from it). Mild drift
+    is handled by locking the camera for the duration of a scan; see health/camera.py.
+    """
+    if len(samples) < MIN_SAMPLES:
+        return FAIL_CLOSED
+
+    r, g, b = [], [], []
+    for s in samples:
+        if not _finite(s.r, s.g, s.b):
+            return FAIL_CLOSED
+        r.append(s.r)
+        g.append(s.g)
+        b.append(s.b)
+
+    g_arr = np.asarray(g, dtype=float)
+    if np.any(g_arr <= 0.0):  # green is the denominator -- a zero would blow up
+        return FAIL_CLOSED
+
+    drift = 0.0
+    for channel in (np.asarray(r, dtype=float), np.asarray(b, dtype=float)):
+        ratio = channel / g_arr
+        mean = float(np.mean(ratio))
+        if mean <= 0.0:
+            return FAIL_CLOSED
+        drift = max(drift, float(np.std(ratio)) / mean)
+
+    return drift if np.isfinite(drift) else FAIL_CLOSED
+
+
 def illumination_metric(samples: Sequence[RgbSample]) -> float:
     """Coefficient of variation of ROI luminance over the window.
 
