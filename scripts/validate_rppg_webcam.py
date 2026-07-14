@@ -34,6 +34,11 @@ from collections import Counter
 import cv2
 import numpy as np
 
+try:
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "perception", "src"))
 
 from body_tracking.health import (  # noqa: E402
@@ -41,20 +46,64 @@ from body_tracking.health import (  # noqa: E402
     HealthConfig,
     RgbSample,
     RPPGEstimator,
+    chroma_drift_metric,
     evaluate_gates,
     illumination_metric,
     motion_metric,
 )
+from body_tracking.health.camera import lock_color_sensor  # noqa: E402
 from body_tracking.health.roi import roi_centroid, roi_pixel_count, sample_mean_rgb  # noqa: E402
 from body_tracking.health.roi_detector import FaceRoiExtractor  # noqa: E402
 
 
-def _gate_components(rppg, cfg, now, have_face, face_px, roi_px):
+class RealSenseSource:
+    """The production camera. Optionally locks AE/AWB, which is what a scan does.
+
+    `exposure_stable` reports what ACTUALLY happened, never what we asked for. A lock
+    we believe in but do not have is worse than no lock -- it would let this harness
+    "validate" a heart rate the camera was busy corrupting. Fails closed.
+    """
+
+    def __init__(self, lock: bool = True, width: int = 640, height: int = 480, fps: int = 30):
+        self.pipe = rs.pipeline()
+        cfg = rs.config()
+        cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
+        profile = self.pipe.start(cfg)
+        sensor = next(s for s in profile.get_device().query_sensors()
+                      if s.get_info(rs.camera_info.name) == "RGB Camera")
+        self.exposure_stable = False
+        if lock:
+            result = lock_color_sensor(sensor, rs.option.enable_auto_exposure,
+                                       rs.option.enable_auto_white_balance)
+            self.exposure_stable = result.locked
+            if not result.locked:
+                print(f"  CAMERA LOCK FAILED: {result.failures}")
+                print("  -> exposure_stable=False; readings will be WITHHELD. "
+                      "This run cannot validate anything.")
+        else:
+            sensor.set_option(rs.option.enable_auto_exposure, 1)
+            sensor.set_option(rs.option.enable_auto_white_balance, 1)
+            print("  --no-lock: AE/AWB left on AUTO. exposure_stable=False, so readings "
+                  "are WITHHELD by design.\n  This mode exists to SHOW that auto is "
+                  "unusable -- watch chroma_drift, not the HR.")
+
+    def read(self):
+        frame = self.pipe.wait_for_frames().get_color_frame()
+        if not frame:
+            return False, None
+        return True, np.asanyarray(frame.get_data())
+
+    def release(self):
+        self.pipe.stop()
+
+
+def _gate_components(rppg, cfg, now, have_face, face_px, roi_px, exposure_stable):
     """Mirror of BodyTrackingNode._on_health_timer. Keep the two in step."""
     win = rppg.window(now, cfg.ambient_window_s)
     fps = rppg.effective_fps(now, cfg.ambient_window_s)
     motion = motion_metric(win)
     illum = illumination_metric(win)
+    chroma = chroma_drift_metric(win)
     if len(win) >= 2:
         intervals = np.diff([s.t for s in win])
         jitter_ms = float(np.std(intervals)) * 1000.0 if len(intervals) > 1 else 0.0
@@ -73,7 +122,11 @@ def _gate_components(rppg, cfg, now, have_face, face_px, roi_px):
         "jitter_ms": jitter_ms,
         "motion": motion,
         "illum_delta": illum,
-        "exposure_stable": True,  # Task 16b: the real RealSense lock
+        "chroma_drift": chroma,
+        # The ACTUAL lock state, never an assumption. If the camera was not locked,
+        # this harness must not be able to "validate" a reading taken while AE/AWB
+        # were free to scramble the very ratios POS/CHROM read.
+        "exposure_stable": exposure_stable,
     }
 
 
@@ -105,7 +158,8 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
                                           cx=centroid[0], cy=centroid[1], w=float(face_px)))
         frame_costs.append((time.perf_counter() - t0) * 1000.0)
 
-        comps = _gate_components(rppg, cfg, now, have_face, face_px, roi_px)
+        comps = _gate_components(rppg, cfg, now, have_face, face_px, roi_px,
+                                 getattr(cap, "exposure_stable", False))
         gate = evaluate_gates(comps, cfg.gates)
         est = rppg.estimate(now, cfg.ambient_window_s, gate_ok=gate.ok)
 
@@ -121,6 +175,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
             last_print = now
             m = comps["motion"]
             i = comps["illum_delta"]
+            c = comps["chroma_drift"]
             hr = f"{est.hr_bpm:5.1f}" if est.hr_bpm is not None else "  -- "
             conf = f"{est.confidence:.2f}" if est.hr_bpm is not None else " -- "
             print(
@@ -128,6 +183,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
                 f"| face {face_px:3d}px roi {roi_px:5d} "
                 f"| motion {'  n/a' if m >= FAIL_CLOSED else f'{m:6.3f}'} "
                 f"| illum {'  n/a' if i >= FAIL_CLOSED else f'{i:6.3f}'} "
+                f"| chroma {'  n/a' if c >= FAIL_CLOSED else f'{c:6.4f}'} "
                 f"| HR {hr} ({conf}) | {gate.reason or 'PASS'}"
             )
 
@@ -138,16 +194,35 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--realsense", action="store_true",
+                    help="use the D415 (the production camera) instead of a webcam")
+    ap.add_argument("--no-lock", action="store_true",
+                    help="with --realsense, leave AE/AWB on AUTO -- the A/B comparison")
     ap.add_argument("--still", type=int, default=40, help="seconds of the sit-still phase")
     ap.add_argument("--motion", type=int, default=12, help="seconds of the move-your-head phase")
     args = ap.parse_args()
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print(f"cannot open /dev/video{args.camera}")
-        return 2
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    if args.realsense:
+        if rs is None:
+            print("pyrealsense2 not installed")
+            return 2
+        cap = RealSenseSource(lock=not args.no_lock)
+        print(f"source: RealSense D415  (AE/AWB {'LOCKED' if not args.no_lock else 'AUTO'})")
+    else:
+        cap = cv2.VideoCapture(args.camera)
+        if not cap.isOpened():
+            print(f"cannot open /dev/video{args.camera}")
+            return 2
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # V4L2: 1 == manual exposure, 3 == aperture-priority (auto). Verify, do not assume.
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+        cap.exposure_stable = cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) == 1
+        print(f"source: /dev/video{args.camera} (webcam)  "
+              f"AE lock {'OK' if cap.exposure_stable else 'FAILED -> readings withheld'}")
+        if not cap.exposure_stable:
+            print("  A webcam that will not hold its exposure cannot give a trustworthy "
+                  "reading. Use --realsense.")
 
     cfg = HealthConfig.default()
     extractor = FaceRoiExtractor()
