@@ -43,8 +43,9 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 14 | Orchestrator HealthBus + HTTP router | done | `617393c` |
 | 15 | Orchestrator ROS bridge | done | `ce53f86` |
 | 15b | Real motion + illumination gates | done | `c58c0de` |
-| 16a | Real-face webcam validation | harness ready — **needs a human to run it** | |
+| 16a | Real-face validation (**now on the D415**) | harness ready — **needs a human to run it** | |
 | 16b | On-device FPS budget + e2e | deferred — needs the Orange Pi | |
+| 16c | Wire the scan-scoped camera lock | **NEXT** — lock built (`5b52c48`), not applied | |
 | 17 | Monitor UI (HR chip + scan card) | done | `c65ce77`, fixed `2551cc1` `cf1be94` |
 | 18 | Config plumbing + docs | done | `c65ce77`, docs added `cf1be94` |
 
@@ -112,6 +113,67 @@ defence. **Close it in Task 16b.** There is a `TODO(Task 16)` at the site.
 
 ---
 
+## The D415 is on the dev box (2026-07-14) — and one of my assumptions was wrong
+
+`illum_delta` **cannot see auto-white-balance drift.** `c58c0de` left
+`exposure_stable` hard-coded `True` and justified it as "illum_delta catches the
+observable symptom of exposure hunting." That is true for auto-**exposure** and false
+for auto-**white-balance**: AWB re-mixes R/G/B while holding brightness roughly
+constant, so a *luminance* metric is blind to it by construction — and POS/CHROM
+consume precisely the ratios AWB is scrambling.
+
+Measured on the real D415, static scene. **AE and AWB are ON by default**, and after
+any event that makes them re-adapt the chrominance takes **~5 seconds** to settle:
+
+| window | illum_delta | B/G CoV |
+|---|---|---|
+| AUTO 0–10s | 0.1168 | **7.484%** ← adapting |
+| AUTO 2–12s | 0.0031 | 0.983% |
+| AUTO 5–15s | 0.0004 | 0.105% ← settled |
+| LOCKED, any | 0.0005 | 0.089% ← clean from frame zero |
+
+7.5% chrominance drift against a pulse that modulates the channels by ~1%: **the
+camera's own regulation is several times larger than the signal.** The window is 10s,
+so one AE/AWB event contaminates an entire window. And illum_delta peaked at 0.1168 —
+**under its 0.15 gate. The window passed.**
+
+Replayed through the production gates on real hardware (`5b52c48`):
+
+| | illum_delta | chroma_drift | result |
+|---|---|---|---|
+| AUTO from cold | 0.1076 → PASS | 0.0539 → **REJECT** | withheld |
+| LOCKED | 0.0103 → PASS | 0.0018 → PASS | published |
+
+**New `chroma_drift` gate** (`max(CoV(R/G), CoV(B/G))`, gate 0.03). The threshold is
+squeezed from **both** sides, because **the pulse is itself a chrominance modulation**
+— that is what POS/CHROM extract:
+
+- a real pulse moves R/G and B/G by **0.56%** (0.5% pulse) to **1.20%** (2% pulse)
+- a settled camera: 0.08–0.22%
+- a severe AWB transient: **7.48%**
+
+A tighter gate would reject the signal it exists to protect. So it catches
+**catastrophic** AWB hunting, not mild drift — the 2–12s tail (0.98%) sits inside the
+pulse range and is genuinely indistinguishable. Mild drift is handled by the lock.
+
+**`health/camera.py`** — `lock_color_sensor()`, pure and duck-typed so it unit-tests
+without a camera. Disables AE+AWB and **verifies by reading back**: `set_option` can be
+accepted and silently ignored, and a lock we *believe* in but do not have is worse than
+no lock, since it would mark `exposure_stable=True` while the camera keeps hunting.
+
+### Camera-lock scope — human decided 2026-07-14: **scan-only**
+
+The colour stream is **shared** with YOLO and safety-critical **fall detection**. A
+permanent AE lock would leave those working on an under-exposed image if the lighting
+changes — trading fall-detection reliability for a better heart rate. Not an acceptable
+trade. `HealthConfig.lock_camera_on_scan` already implied this.
+
+**NOT YET WIRED.** The lock exists and is verified against the hardware, but nothing
+applies it at runtime. Next commit: RealSense publisher locks on scan start, restores
+auto on scan end; perception drives `exposure_stable` from the real lock state.
+
+---
+
 ## Task 16 is split — 16a can run today, 16b needs the robot
 
 **The biggest untested assumption in this feature:** all 111 tests validate against
@@ -130,12 +192,19 @@ machine with a webcam. No ROS, no RealSense, no Pi. It drives the production pat
 It needs a human to sit in front of the camera, so it cannot be run by an agent.
 
 ```bash
-PYTHONPATH= .venv/bin/python scripts/validate_rppg_webcam.py
+# The D415 is now connected -- validate on the PRODUCTION camera, AE/AWB locked:
+PYTHONPATH= .venv/bin/python scripts/validate_rppg_webcam.py --realsense
+
+# The A/B: same run with AE/AWB left on auto. Readings are withheld BY DESIGN;
+# watch chroma_drift, not the HR.
+PYTHONPATH= .venv/bin/python scripts/validate_rppg_webcam.py --realsense --no-lock
 ```
 
 Sit close (the gates need a face ≳127 px wide), even lighting, still for 40s, then
 move your head for 12s. It prints why each reading was withheld, so a failure is
-diagnostic rather than mysterious.
+diagnostic rather than mysterious, and it now reports the **confidence distribution
+against the 0.70 gate** — which is what tells us whether a real face clears a gate
+sited against synthetic pulses.
 
 **Task 16b — the Orange Pi.** Deferred by the human on 2026-07-12. Still to do:
 - FPS budget, health on vs off. **This is a real decision gate:** if the MediaPipe
