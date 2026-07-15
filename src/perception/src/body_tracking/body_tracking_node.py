@@ -3,12 +3,12 @@ import os
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from geometry_msgs.msg import Point
 from cv_bridge import CvBridge
 import cv2
 from rclpy.time import Time
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import click
 import numpy as np
 from tqdm import tqdm
@@ -16,7 +16,8 @@ from .body_detector import BodyDetector
 from .health import (
     RPPGEstimator, ScanController, HealthConfig, RgbSample, ScanState, build_metrics,
     describe_complexion, evaluate_gates, motion_metric, illumination_metric,
-    chroma_drift_metric, FAIL_CLOSED,
+    chroma_drift_metric, exposure_stable_for, is_scan_locked,
+    window_captured_under_lock, FAIL_CLOSED,
 )
 from .health.roi_detector import FaceRoiExtractor
 from .health.roi import sample_mean_rgb, roi_pixel_count, roi_centroid
@@ -153,6 +154,24 @@ class BodyTrackingNode(Node):
             self.scan_cmd_sub = self.create_subscription(
                 String, "/health/scan_cmd", self._on_scan_cmd, 10
             )
+            # Scan-scoped camera lock (Task 16c). This node decides WHEN to lock (from
+            # scan state); the RealSense publisher, which owns the sensor, applies it and
+            # reports the VERIFIED state back. Latched QoS so state survives a late join.
+            lock_qos = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.camera_lock_pub = self.create_publisher(
+                Bool, "/health/camera_lock", lock_qos
+            )
+            self.camera_lock_state_sub = self.create_subscription(
+                String, "/health/camera_lock_state", self._on_camera_lock_state, lock_qos
+            )
+            self._camera_lock_state = None
+            self._camera_lock_state_t = 0.0
+            self._camera_lock_since = None  # when the current unbroken lock began
             self.create_timer(1.0, self._on_health_timer)
             self.get_logger().info("Health metrics (rPPG) enabled")
 
@@ -429,8 +448,46 @@ class BodyTrackingNode(Node):
         elif action == "cancel":
             self._scan.cancel(now)
 
+    def _on_camera_lock_state(self, msg: String) -> None:
+        try:
+            state = json.loads(msg.data or "{}")
+        except (ValueError, TypeError):
+            return
+        if isinstance(state, dict):
+            self._camera_lock_state = state
+            self._camera_lock_state_t = self.get_clock().now().nanoseconds / 1e9
+
+    def _camera_locked(self, ros_now: float) -> bool:
+        """Whether the camera is VERIFIED locked for a scan right now. Fails closed: a
+        missing or stale report from the RealSense publisher counts as not-locked, so a
+        scan withholds rather than trusting a lock we have not heard confirmed.
+
+        Uses is_scan_locked (both auto controls verified off), NOT the ambiguous
+        `locked` field, which a partial auto-restore also sets."""
+        if ros_now - self._camera_lock_state_t > 3.0:  # publisher republishes at 1 Hz
+            return False
+        return is_scan_locked(self._camera_lock_state)
+
     def _on_health_timer(self) -> None:
         ros_now = self.get_clock().now().nanoseconds / 1e9
+
+        # Request the scan-scoped camera lock: the RealSense publisher engages AE/AWB
+        # lock while a scan is in progress and restores auto otherwise. Idempotent on
+        # the publisher side, so republishing every tick is cheap and self-healing.
+        scan_active = self._scan.is_active
+        lock_msg = Bool()
+        lock_msg.data = scan_active
+        self.camera_lock_pub.publish(lock_msg)
+
+        # Track when the current unbroken verified lock began, so exposure_stable can
+        # require the WHOLE analysis window to have been captured under lock -- not just
+        # the camera to be locked at this instant (the window still holds pre-lock,
+        # auto-AE/AWB frames for the first window_s after a lock or a relock).
+        if self._camera_locked(ros_now):
+            if self._camera_lock_since is None:
+                self._camera_lock_since = ros_now
+        else:
+            self._camera_lock_since = None
 
         have_face = self._health_last_roi is not None and self._health_last_mean is not None
 
@@ -483,10 +540,15 @@ class BodyTrackingNode(Node):
             # those ratios. Measured on the D415: a cold AWB transient drove B/G 7.5%
             # while illum_delta stayed UNDER its gate. This is that gate.
             "chroma_drift": chroma_drift,
-            # TODO(Task 16): report the real RealSense exposure/WB lock state. Until
-            # then illum_delta above catches the observable symptom of exposure
-            # hunting (luminance drift). Tracked as a known gap in STATE.md.
-            "exposure_stable": True,
+            # Ambient runs on auto AE/AWB and leans on chroma_drift/illum_delta above;
+            # a scan is stable only once the lock has covered the FULL analysis window
+            # (not merely the current instant). See exposure_stable_for.
+            "exposure_stable": exposure_stable_for(
+                scan_active,
+                window_captured_under_lock(
+                    self._camera_locked(ros_now), self._camera_lock_since, ros_now, window_s
+                ),
+            ),
         }
         gate = evaluate_gates(components, self.health_config.gates)
 

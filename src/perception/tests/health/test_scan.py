@@ -171,3 +171,31 @@ def test_a_later_scan_does_not_inherit_the_previous_override():
         sc.update(t, gate_ok=True)
 
     assert sc.state != ScanState.COMPLETE, "the previous scan's 10s target leaked"
+
+
+# --------------------------------------------------------------------------
+# is_active -- drives whether the camera lock is requested (Task 16c)
+# --------------------------------------------------------------------------
+
+def test_is_active_only_during_a_running_scan():
+    sc = ScanController(target_clean_s=30.0, timeout_s=90.0, warmup_s=0.0)
+    assert not sc.is_active                       # IDLE
+
+    sc.start("m1", now=0.0)
+    assert sc.is_active                           # WARMING
+    sc.update(1.0, gate_ok=True)
+    assert sc.is_active                           # COLLECTING
+
+    sc.cancel(2.0)
+    assert not sc.is_active                       # CANCELLED -- lock must be released
+
+
+def test_is_active_false_after_completion():
+    sc = ScanController(target_clean_s=3.0, timeout_s=90.0, warmup_s=0.0)
+    sc.start("m1", now=0.0)
+    t = 0.0
+    for _ in range(4):
+        t += 1.0
+        sc.update(t, gate_ok=True)
+    assert sc.state == ScanState.COMPLETE
+    assert not sc.is_active, "a completed scan must release the camera lock"

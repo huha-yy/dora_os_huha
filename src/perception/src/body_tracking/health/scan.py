@@ -3,6 +3,9 @@ from typing import Optional
 from .types import ScanState
 
 
+_ACTIVE_STATES = (ScanState.WARMING, ScanState.COLLECTING, ScanState.INSUFFICIENT_QUALITY)
+
+
 class ScanController:
     """State machine for an on-demand ~30s camera health scan.
 
@@ -66,6 +69,12 @@ class ScanController:
         return self._state
 
     @property
+    def is_active(self) -> bool:
+        """A scan is in progress. Drives the scan-scoped camera lock (Task 16c): the
+        lock is requested while this is True and released when it goes False."""
+        return self._state in _ACTIVE_STATES
+
+    @property
     def progress_clean_s(self) -> float:
         return self._clean
 
@@ -95,11 +104,11 @@ class ScanController:
         self._target = float(target_clean_s) if target_clean_s else self._default_target
 
     def cancel(self, now: float) -> None:
-        if self._state in (ScanState.WARMING, ScanState.COLLECTING, ScanState.INSUFFICIENT_QUALITY):
+        if self._state in _ACTIVE_STATES:
             self._state = ScanState.CANCELLED
 
     def update(self, now: float, gate_ok: bool) -> None:
-        if self._state not in (ScanState.WARMING, ScanState.COLLECTING, ScanState.INSUFFICIENT_QUALITY):
+        if self._state not in _ACTIVE_STATES:
             return
 
         if now < self._last_t:
