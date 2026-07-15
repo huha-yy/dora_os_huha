@@ -66,6 +66,17 @@ HEAD_SERVO2_LIMIT_DOWN = 284
 HEAD_SPEED           = 2400
 HEAD_ACC             = 50
 
+# 手臂舵机 (位置控制, ID 6-13, 单总线共用)
+ARM_IDS         = [6, 7, 8, 9, 10, 11, 12, 13]
+ARM_SPEED       = 2400
+ARM_ACC         = 50
+ARM_PRESETS = {
+    "home":       {6:1, 7:39, 8:2680, 9:1389, 10:3764, 11:1088, 12:2656, 13:1551},
+    "hug":        {6:231,7:3409,8:2790,9:196,10:3766,11:1873,12:2529,13:2770},
+    "raise_right":{6:230,7:3402,8:2683,9:43,10:3765,11:2133,12:2656,13:1651},
+    "raise_left": {6:232,7:3037,8:2685,9:1340,10:3765,11:1605,12:2658,13:2675},
+}
+
 L = 1.0                           # 旋转增益
 WHEEL_RADIUS    = 0.05            # 轮子半径 (米)
 ENCODER_RES     = 4096            # 编码器分辨率 (一圈的脉冲数)
@@ -268,6 +279,9 @@ class ChassisNode(Node):
         self.head_cmd_sub = self.create_subscription(
             String, "/head_cmd", self._head_cmd_callback, 10
         )
+        self.arm_cmd_sub = self.create_subscription(
+            String, "/arm_cmd", self._arm_cmd_callback, 10
+        )
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -307,6 +321,13 @@ class ChassisNode(Node):
             self.bus.torque_enable(sid)
             self.get_logger().info(f"头颈舵机 [ID:{sid}] {name} 初始化完成")
 
+        # 手臂舵机 (ID 6-13): 位置模式
+        ARM_NAMES = {6:"右手",7:"右腕",8:"右臂",9:"右肩",10:"左手",11:"左腕",12:"左臂",13:"左肩"}
+        for sid in ARM_IDS:
+            self.bus.set_position_mode(sid)
+            self.bus.torque_enable(sid)
+            self.get_logger().info(f"手臂舵机 [ID:{sid}] {ARM_NAMES.get(sid,'')} 初始化完成")
+
     # 头颈动作映射
     HEAD_ACTIONS = {
         "head_left":      (HEAD_SERVO1_ID, HEAD_SERVO1_CENTER - HEAD_SERVO1_LIMIT),
@@ -341,6 +362,21 @@ class ChassisNode(Node):
             sid, pos = self.HEAD_ACTIONS[action]
             self.bus.write_position(sid, pos, HEAD_SPEED, HEAD_ACC)
             self.get_logger().info(f"[头颈] {action}: ID={sid} -> pos={pos}")
+
+    def _arm_cmd_callback(self, msg: String):
+        """接收 /arm_cmd, 执行手臂预设动作"""
+        cmd = msg.data.strip().lower()
+        if cmd not in ARM_PRESETS:
+            self.get_logger().warn(f"未知手臂指令: {cmd}, 可用: {list(ARM_PRESETS.keys())}")
+            return
+
+        targets = ARM_PRESETS[cmd]
+        self.get_logger().info(f"[手臂] 执行预设: {cmd}")
+        for sid in ARM_IDS:
+            target = targets.get(sid, 2048)
+            self.bus.write_position(sid, target, ARM_SPEED, ARM_ACC)
+            time.sleep(0.03)
+        self.get_logger().info(f"[手臂] {cmd} 完成")
 
     def _control_loop(self):
         """50Hz 主循环: 发送速度 + 读取编码器 + 发布里程计"""
