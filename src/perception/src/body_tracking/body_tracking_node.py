@@ -483,6 +483,17 @@ class BodyTrackingNode(Node):
         # require the WHOLE analysis window to have been captured under lock -- not just
         # the camera to be locked at this instant (the window still holds pre-lock,
         # auto-AE/AWB frames for the first window_s after a lock or a relock).
+        #
+        # Two clocks, both ROS system time but offset by stream latency:
+        #  - lock_since = ros_now, the lock-REPORT time. The report arrives only after the
+        #    publisher applied the lock, so this is never BEFORE the physical lock --
+        #    stamping it with the (possibly older, pre-lock) last frame time would
+        #    backdate the lock and admit contaminated frames.
+        #  - the window END is compared using _health_last_frame_t, where the estimator
+        #    window actually ends.
+        # Requiring last_frame_t - window_s >= lock_since is then a sound, conservative
+        # check: every sample in the window was captured at or after a time known to be
+        # post-lock. Under lag it simply waits window_s + lag before trusting a scan.
         if self._camera_locked(ros_now):
             if self._camera_lock_since is None:
                 self._camera_lock_since = ros_now
@@ -546,7 +557,8 @@ class BodyTrackingNode(Node):
             "exposure_stable": exposure_stable_for(
                 scan_active,
                 window_captured_under_lock(
-                    self._camera_locked(ros_now), self._camera_lock_since, ros_now, window_s
+                    self._camera_locked(ros_now), self._camera_lock_since,
+                    self._health_last_frame_t, window_s,
                 ),
             ),
         }
