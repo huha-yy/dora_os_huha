@@ -45,7 +45,7 @@ live overlay and an on-demand 30s scan in the monitor UI.
 | 15b | Real motion + illumination gates | done | `c58c0de` |
 | 16a | Real-face validation (**now on the D415**) | harness ready — **needs a human to run it** | |
 | 16b | On-device FPS budget + e2e | deferred — needs the Orange Pi | |
-| 16c | Wire the scan-scoped camera lock | **NEXT** — lock built (`5b52c48`), not applied | |
+| 16c | Wire the scan-scoped camera lock | done | `5f7ec94` (was `d26c363`) |
 | 17 | Monitor UI (HR chip + scan card) | done | `c65ce77`, fixed `2551cc1` `cf1be94` |
 | 18 | Config plumbing + docs | done | `c65ce77`, docs added `cf1be94` |
 
@@ -168,9 +168,24 @@ permanent AE lock would leave those working on an under-exposed image if the lig
 changes — trading fall-detection reliability for a better heart rate. Not an acceptable
 trade. `HealthConfig.lock_camera_on_scan` already implied this.
 
-**NOT YET WIRED.** The lock exists and is verified against the hardware, but nothing
-applies it at runtime. Next commit: RealSense publisher locks on scan start, restores
-auto on scan end; perception drives `exposure_stable` from the real lock state.
+**WIRED (`5f7ec94`).** Cross-process: perception publishes `/health/camera_lock` =
+scan.is_active; the RealSense publisher (which owns the sensor) locks AE+AWB and reports
+the verified state on `/health/camera_lock_state`; perception drives `exposure_stable`
+from it. The lock contract was round-trip verified with real rclpy on this box.
+
+Codex found **seven** defects across the wiring, all safety-relevant (never take a scan
+reading, or leave the shared stream locked, when we should not), all fixed and
+negative-controlled:
+1. retry by verified physical state, not want==last_want (else a transient failure latches);
+2. verify the auto-restore by read-back too (symmetric with the lock);
+3. a lock lease / dead-man's switch so a crashed perception node cannot leave the camera locked;
+4. a scan lock requires BOTH controls verified off (`is_scan_locked`), never the overloaded `locked` field a partial restore also sets;
+5. the camera node puts its own package root on sys.path so `run_camera.py`'s launch does not ModuleNotFoundError;
+6. `exposure_stable` requires the lock to cover the FULL analysis window, not just the current instant (`window_captured_under_lock`);
+7. that coverage is checked with lock_since at report time and the window end at frame time -- the two clocks handled correctly so stream lag cannot admit pre-lock frames.
+
+The lock is released on scan end AND on publisher shutdown, so a crashed scan cannot
+leave fall detection on a frozen exposure. This closes the `exposure_stable` gap.
 
 ---
 
