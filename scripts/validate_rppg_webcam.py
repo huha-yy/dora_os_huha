@@ -182,6 +182,10 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
     t_end = time.monotonic() + seconds
     last_print = 0.0
     reasons, hrs, confs, frame_costs = Counter(), [], [], []
+    # Raw per-frame ROI samples (the estimator's whole input). Saved with --save so the
+    # confidence gate can be studied and retuned OFFLINE against real data, without
+    # asking a human to sit for every experiment.
+    samples = []
 
     while time.monotonic() < t_end:
         ok, frame = cap.read()
@@ -203,6 +207,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
                 r, g, b = mean
                 rppg.add_sample(RgbSample(t=now, r=r, g=g, b=b,
                                           cx=centroid[0], cy=centroid[1], w=float(face_px)))
+                samples.append((now, r, g, b, centroid[0], centroid[1], float(face_px)))
         frame_costs.append((time.perf_counter() - t0) * 1000.0)
 
         comps = _gate_components(rppg, cfg, now, have_face, face_px, roi_px,
@@ -214,7 +219,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
         # Record confidence whenever the OTHER gates passed -- that is the population
         # the confidence gate is deciding on. (est is None-ish when the gate failed.)
         if gate.ok:
-            confs.append(est.confidence)
+            confs.append((est.confidence, est.spectral_snr, est.peak_dominance))
             if est.hr_bpm is not None:
                 hrs.append(est.hr_bpm)
 
@@ -235,6 +240,7 @@ def run_phase(cap, extractor, rppg, cfg, seconds, label, banner):
             )
 
     return {"label": label, "reasons": reasons, "hrs": hrs, "confs": confs,
+            "samples": samples,
             "cost_ms": float(np.mean(frame_costs)) if frame_costs else 0.0}
 
 
@@ -247,6 +253,8 @@ def main() -> int:
                     help="with --realsense, leave AE/AWB on AUTO -- the A/B comparison")
     ap.add_argument("--still", type=int, default=40, help="seconds of the sit-still phase")
     ap.add_argument("--motion", type=int, default=12, help="seconds of the move-your-head phase")
+    ap.add_argument("--save", type=str, default=None,
+                    help="write the phase-1 raw ROI samples to this CSV for offline analysis")
     args = ap.parse_args()
 
     if args.realsense:
@@ -283,6 +291,13 @@ def main() -> int:
                        f"PHASE 2 ({args.motion}s) -- NOW MOVE YOUR HEAD around, keep it up")
     cap.release()
 
+    if args.save:
+        with open(args.save, "w") as f:
+            f.write("t,r,g,b,cx,cy,w\n")
+            for row in still["samples"]:
+                f.write(",".join(f"{v:.6f}" for v in row) + "\n")
+        print(f"\n  saved {len(still['samples'])} phase-1 samples to {args.save}")
+
     print(f"\n{'=' * 72}\n  RESULT\n{'=' * 72}")
     print(f"  per-frame CPU cost (x86, NOT the Pi): {still['cost_ms']:.1f} ms\n")
 
@@ -310,14 +325,20 @@ def main() -> int:
     # REAL face lands. If real confidence clusters below the gate, the gate is too
     # strict for this camera and lighting; if it sits in the noise band, the reading
     # is not trustworthy no matter what number it prints.
-    confs = np.array(still["confs"]) if still["confs"] else np.array([])
+    triples = np.array(still["confs"]) if still["confs"] else np.zeros((0, 3))
     print()
-    if confs.size:
+    if triples.size:
+        confs, snrs, doms = triples[:, 0], triples[:, 1], triples[:, 2]
         print(f"  CONFIDENCE on a real face (gate = {cfg.gates.min_confidence}):")
-        print(f"           median {np.median(confs):.3f}   p05 {np.percentile(confs, 5):.3f}   "
+        print(f"           confidence  median {np.median(confs):.3f}   p05 {np.percentile(confs, 5):.3f}   "
               f"max {confs.max():.3f}")
         print(f"           cleared the gate: {100.0 * (confs >= cfg.gates.min_confidence).mean():.0f}% "
               f"of windows")
+        # Break confidence into its two terms so a retune targets the right one:
+        # confidence = 0.5*snr/(snr+4) + 0.5*dominance.
+        print(f"           spectral_snr  median {np.median(snrs):.2f}   "
+              f"(snr term = snr/(snr+4), median {np.median(snrs / (snrs + 4.0)):.3f})")
+        print(f"           peak_dominance median {np.median(doms):.3f}")
         print(f"           for scale -- synthetic noise p99 ~0.64, a clean 1% pulse ~0.85+")
     else:
         print("  CONFIDENCE: no windows produced an estimate at all.")
