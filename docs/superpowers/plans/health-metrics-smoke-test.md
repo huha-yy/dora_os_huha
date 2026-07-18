@@ -1,5 +1,42 @@
 # On-device smoke test — camera health metrics (Task 16b)
 
+## Run 1 results — 2026-07-18 (Orange Pi 5, D415, health branch on `health-test-16b`)
+
+Driven remotely over SSH; `main` on the Pi left untouched (health applied on a throwaway
+branch, which was clean — the "6-month divergence" was git-history reshaping only; the
+Pi's actual working files were byte-identical to the branch base, so the 45-file health
+patch applied with zero conflicts).
+
+- **Health core on aarch64:** ✅ POS recovered 72.1 bpm from a synthetic pulse
+  (conf 1.00); MediaPipe FaceRoiExtractor constructs. numpy 1.26.4 / scipy 1.15.3 /
+  mediapipe 0.10.18 present in the Pi venv.
+- **Camera-lock round-trip (16c) on real hardware:** ✅ idle `auto:true` → scan start
+  `locked:true` with both `auto_exposure_off` and `auto_white_balance_off` verified →
+  "camera lock ENGAGED" logged → cancel restores `auto:true`. Exposure confirmed back to
+  auto after shutdown (clean release).
+- **FPS budget — ⚠️ OVER BUDGET, decision gate fired.** Fall-detection "Detect FPS",
+  steady state (warm-up trimmed), vision-only launch (camera + perception, no nav/chatbot):
+
+  | | median | mean | frac < 10 fps |
+  |---|---|---|---|
+  | health OFF | **14.9** | 13.8 | 21% |
+  | health ON  | **9.9** | 11.1 | 56% |
+
+  **Drop: 34% median / 19% mean — both exceed the 15% budget.** The extra per-frame
+  MediaPipe *face* detector (`FaceRoiExtractor`) is too expensive on the RK3588.
+
+  **DECISION:** switch to the pose-only ROI fallback. `roi_from_pose` (Task 8) exists but
+  is **not yet wired** into `body_tracking_node.py` — the node always calls
+  `FaceRoiExtractor`. Next task: in `_update_health_roi`, when
+  `HealthConfig.detector == "pose_fallback"`, derive the face ROI from the pose landmarks
+  already computed for fall detection (nose/eyes) instead of running a second detector,
+  then re-measure on device.
+- **E2E scan reading:** not attempted this run (deferred lighting fix — an underexposed
+  face is correctly withheld; see scope note below).
+
+---
+
+
 Run this on the **Orange Pi 5 (RK3588S) with the D415**. It validates the parts that
 can only be tested on the real robot: the two-node camera-lock plumbing, the ROS topic
 contract, and — the real decision gate — the fall-detection **FPS budget** with the
