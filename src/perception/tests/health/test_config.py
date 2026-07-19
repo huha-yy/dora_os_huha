@@ -117,3 +117,13 @@ def test_non_finite_gate_values_raise(bad):
 def test_non_finite_windows_raise(bad):
     with pytest.raises(ValueError):
         HealthConfig.from_dict(bad)
+
+
+def test_detector_must_be_known():
+    with pytest.raises(ValueError, match="detector"):
+        HealthConfig.from_dict({"detector": "nonsense"})
+
+
+@pytest.mark.parametrize("d", ["mediapipe_face", "pose_fallback"])
+def test_valid_detectors_accepted(d):
+    assert HealthConfig.from_dict({"detector": d}).detector == d

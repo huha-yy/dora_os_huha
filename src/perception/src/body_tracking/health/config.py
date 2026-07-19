@@ -13,6 +13,7 @@ from difflib import get_close_matches
 from typing import Any, Mapping
 
 BACKENDS = ("pos", "chrom")
+DETECTORS = ("mediapipe_face", "pose_fallback")
 
 
 def _reject_unknown(d: Mapping[str, Any], known: set, where: str) -> None:
@@ -131,6 +132,10 @@ class HealthConfig:
         if "backend" in d and str(d["backend"]).lower() not in BACKENDS:
             raise ValueError(
                 f"Unknown backend {d['backend']!r}. Valid backends: {', '.join(BACKENDS)}"
+            )
+        if "detector" in d and d["detector"] not in DETECTORS:
+            raise ValueError(
+                f"Unknown detector {d['detector']!r}. Valid detectors: {', '.join(DETECTORS)}"
             )
         # A non-positive window would make the estimator silently useless rather than
         # loudly broken -- reject it here, at the boundary.

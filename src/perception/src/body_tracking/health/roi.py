@@ -48,6 +48,53 @@ def roi_from_pose(
     return FaceRoi(patches=patches, face_px=face_px)
 
 
+MIN_POSE_VISIBILITY = 0.5
+
+
+def roi_from_pose_landmarks(
+    nose: Tuple[float, float, float],
+    left_eye: Tuple[float, float, float],
+    right_eye: Tuple[float, float, float],
+    person_bbox: Tuple[int, int, int, int],
+    frame_w: int,
+    frame_h: int,
+    min_visibility: float = MIN_POSE_VISIBILITY,
+) -> Optional[FaceRoi]:
+    """Face ROI from POSE landmarks (the FPS-budget fallback for the face detector).
+
+    Each landmark is ``(x, y, visibility)``. CRITICAL: x, y are normalized to the
+    PERSON CROP, not the full frame -- MediaPipe Pose runs on ``frame[y1:y2, x1:x2]``.
+    So they must be mapped back through ``person_bbox`` = ``(x1, y1, width, height)`` in
+    full-frame pixels:  ``px = x1 + x*width``. Multiplying by the frame size instead
+    would place the ROI wherever the person happens to sit in normalized frame space --
+    i.e. on the background -- and feed the estimator wrong-skin pixels silently. Fall
+    detection never hit this because it uses crop-relative angles, not absolute position.
+
+    Reuses ``roi_from_pose``'s geometry once the points are in full-frame pixels; the
+    point of the whole path is that these landmarks are ALREADY computed for fall
+    detection, so no second (expensive) MediaPipe face graph runs.
+
+    Fails CLOSED: if any of the three landmarks is below ``min_visibility``, return None.
+    A face ROI placed off an unsure landmark would sample the wrong pixels.
+    """
+    if min(nose[2], left_eye[2], right_eye[2]) < min_visibility:
+        return None
+    x1, y1, bw, bh = person_bbox
+    if bw <= 0 or bh <= 0:
+        return None
+
+    def to_frame_px(lm: Tuple[float, float, float]) -> Tuple[float, float]:
+        return (x1 + lm[0] * bw, y1 + lm[1] * bh)
+
+    return roi_from_pose(
+        to_frame_px(nose),
+        to_frame_px(left_eye),
+        to_frame_px(right_eye),
+        frame_w,
+        frame_h,
+    )
+
+
 def _iter_valid_patches(
     patches: List[Tuple[int, int, int, int]], frame_w: int, frame_h: int
 ) -> Iterator[Tuple[int, int, int, int]]:

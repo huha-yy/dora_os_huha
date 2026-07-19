@@ -21,6 +21,7 @@ from .health import (
 )
 from .health.roi_detector import FaceRoiExtractor
 from .health.roi import sample_mean_rgb, roi_pixel_count, roi_centroid
+from .pose_face_roi import pose_face_roi
 from .state import FrameTrackingResult, RawPose, HumanStatus
 from collections import deque
 import logging
@@ -130,6 +131,13 @@ class BodyTrackingNode(Node):
             self.health_config = HealthConfig.from_dict({
                 "enabled": os.getenv("HEALTH_ENABLED", "1") != "0",
                 "backend": os.getenv("HEALTH_BACKEND", "pos"),
+                # Default to the pose-derived ROI: the on-device FPS test (2026-07-18)
+                # measured the per-frame MediaPipe face detector at a 19-34% hit to
+                # fall-detection FPS, over the 15% budget. pose_fallback reuses the pose
+                # landmarks already computed for fall detection, so no second detector
+                # runs. Override with HEALTH_DETECTOR=mediapipe_face for the sharper ROI
+                # where the FPS headroom exists.
+                "detector": os.getenv("HEALTH_DETECTOR", "pose_fallback"),
             })
         except ValueError as exc:
             self.get_logger().error(
@@ -144,7 +152,13 @@ class BodyTrackingNode(Node):
         self._health_scan_result = None
         self._health_last_scan_state = None
         if self.health_config.enabled:
-            self._roi_extractor = FaceRoiExtractor()
+            # Only build the MediaPipe face detector when it will actually be used --
+            # constructing it in pose_fallback mode would load a graph we never call.
+            self._roi_extractor = (
+                FaceRoiExtractor()
+                if self.health_config.detector == "mediapipe_face"
+                else None
+            )
             self._rppg = RPPGEstimator(self.health_config)
             self._scan = ScanController(
                 target_clean_s=self.health_config.scan_window_s,
@@ -394,13 +408,23 @@ class BodyTrackingNode(Node):
         except Exception as exc:  # pragma: no cover - defensive
             self.get_logger().warn(f"Failed to publish annotated frame: {exc}")
 
-    def _update_health_roi(self, frame: np.ndarray) -> None:
-        roi = self._roi_extractor.update(frame)
+    def _update_health_roi(self, frame: np.ndarray, tracking_result) -> None:
+        if self.health_config.detector == "pose_fallback":
+            roi = self._roi_from_pose_landmarks(frame, tracking_result)
+        else:
+            roi = self._roi_extractor.update(frame)
         if roi is None:
             self._health_last_roi = None
             return
         self._health_last_roi = roi
         self._health_roi_age = 0
+
+    def _roi_from_pose_landmarks(self, frame: np.ndarray, tracking_result):
+        """Face ROI from the pose landmarks already computed for fall detection -- the
+        FPS-budget path (no second MediaPipe graph). Extraction lives in the ROS-free,
+        unit-tested pose_face_roi()."""
+        h, w = frame.shape[:2]
+        return pose_face_roi(tracking_result, w, h)
 
     def _sample_health_roi(self, frame: np.ndarray, t_sec: float) -> None:
         self._health_roi_age += 1
@@ -645,7 +669,7 @@ class BodyTrackingNode(Node):
         self._publish_annotated(annotated, fall_msg)
 
         if getattr(self, "health_config", None) and self.health_config.enabled:
-            self._update_health_roi(cv_image)
+            self._update_health_roi(cv_image, tracking_result)
 
         tracking_result.debug_frame = None
         self.tracking_results.append(tracking_result)
