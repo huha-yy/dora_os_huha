@@ -203,10 +203,12 @@ def test_eyes_too_close_withholds():
     assert roi is None
 
 
-def test_at_frame_boundary_stays_in_bounds():
+def test_at_frame_boundary_produces_an_in_bounds_roi():
+    # person hugging the top-left corner; the ROI must still be produced and clipped
+    # to stay inside the frame (not silently withheld, and not out of bounds).
     roi = roi_from_pose_landmarks(
-        nose=_lm(0.5, 0.5), left_eye=_lm(0.2, 0.2), right_eye=_lm(0.8, 0.2),
-        person_bbox=(0, 0, 60, 80), frame_w=W, frame_h=H)
-    if roi is not None:
-        for (x, y, pw, ph) in roi.patches:
-            assert x >= 0 and y >= 0 and x + pw <= W and y + ph <= H
+        nose=_lm(0.5, 0.9), left_eye=_lm(0.2, 0.5), right_eye=_lm(0.8, 0.5),
+        person_bbox=(0, 0, 200, 260), frame_w=W, frame_h=H)
+    assert roi is not None, "a face at the frame corner should clip, not withhold"
+    for (x, y, pw, ph) in roi.patches:
+        assert x >= 0 and y >= 0 and x + pw <= W and y + ph <= H
