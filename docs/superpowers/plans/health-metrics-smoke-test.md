@@ -31,6 +31,17 @@ patch applied with zero conflicts).
   `HealthConfig.detector == "pose_fallback"`, derive the face ROI from the pose landmarks
   already computed for fall detection (nose/eyes) instead of running a second detector,
   then re-measure on device.
+
+  **RESOLVED (2026-07-19):** pose-only ROI fallback wired (`pose_face_roi`, default
+  `detector=pose_fallback`) and re-measured on the Pi:
+
+  | | median | mean | frac < 10 fps |
+  |---|---|---|---|
+  | health OFF | 14.9 | 13.0 | 25% |
+  | health ON (pose_fallback) | 14.9 | 12.2 | 31% |
+
+  **Drop: 0% median / 6% mean — WITHIN the 15% budget** (was 34%/19% with the face
+  detector). ✅ FPS budget met.
 - **E2E scan reading:** not attempted this run (deferred lighting fix — an underexposed
   face is correctly withheld; see scope note below).
 
