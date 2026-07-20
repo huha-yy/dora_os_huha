@@ -181,6 +181,7 @@ class ChatbotClient {
                 break;
 
             case 'audio-response':
+                this.ttsPlaying = true;
                 this.playAudio(data.audioPath);
                 break;
 
@@ -196,8 +197,9 @@ class ChatbotClient {
             case 'robot-response':
                 // Display robot response
                 this.addMessage('robot', data.text);
-                // Play audio if available
+                // Play audio if available - pause mic to avoid echo loop
                 if (data.audio) {
+                    this.ttsPlaying = true;
                     this.playAudio(data.audio);
                 }
                 break;
@@ -275,6 +277,8 @@ class ChatbotClient {
     }
 
     sendInterrupt() {
+        this.elements.audioPlayer.pause();
+        this.ttsPlaying = false;
         this.send({
             type: 'interrupt-signal',
             text: ''
@@ -307,29 +311,35 @@ class ChatbotClient {
                 } 
             });
             
-            // Create AudioContext for raw PCM access
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: 16000
             });
+            await this.audioContext.resume();
             
+            // Load AudioWorklet processor (modern replacement for deprecated ScriptProcessorNode)
+            await this.audioContext.audioWorklet.addModule('mic-processor.js');
+
             const source = this.audioContext.createMediaStreamSource(stream);
-            this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+            this.micWorkletNode = new AudioWorkletNode(this.audioContext, 'mic-processor', {
+                numberOfInputs: 1,
+                numberOfOutputs: 0
+            });
             this.stream = stream;
 
-            this.scriptProcessor.onaudioprocess = (event) => {
+            this.micWorkletNode.port.onmessage = (event) => {
                 if (!this.isMicActive) return;
-
-                const inputData = event.inputBuffer.getChannelData(0);
-                const chunk = new Float32Array(inputData);
-
-                this.send({
-                    type: 'raw-audio-data',
-                    audio: Array.from(chunk)
-                });
+                if (event.data.type === 'ready') {
+                    this.log('receive', 'AudioWorklet ready');
+                } else if (event.data.type === 'audio-chunk') {
+                    if (this.ttsPlaying) return;
+                    this.send({
+                        type: 'raw-audio-data',
+                        audio: Array.from(event.data.audio)
+                    });
+                }
             };
 
-            source.connect(this.scriptProcessor);
-            this.scriptProcessor.connect(this.audioContext.destination);
+            source.connect(this.micWorkletNode);
 
             this.isMicActive = true;
             this.isRecording = true;
@@ -354,10 +364,10 @@ class ChatbotClient {
         this.isMicActive = false;
         this.isRecording = false;
         
-        // Stop audio processing
-        if (this.scriptProcessor) {
-            this.scriptProcessor.disconnect();
-            this.scriptProcessor = null;
+        if (this.micWorkletNode) {
+            this.micWorkletNode.disconnect();
+            this.micWorkletNode.port.onmessage = null;
+            this.micWorkletNode = null;
         }
         if (this.audioContext) {
             this.audioContext.close();
@@ -408,9 +418,11 @@ class ChatbotClient {
         this.elements.audioPlayer.src = audioUrl;
         this.elements.audioPlayer.play().catch(error => {
             this.log('error', `Failed to play audio: ${error.message}`);
+            this.ttsPlaying = false;
         });
 
         this.elements.audioPlayer.onended = () => {
+            this.ttsPlaying = false;
             this.send({ type: 'frontend-playback-complete' });
         };
     }

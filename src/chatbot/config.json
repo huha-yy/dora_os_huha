@@ -24,11 +24,11 @@
         "silero_vad": {
             "orig_sr": 16000,
             "target_sr": 16000,
-            "prob_threshold": 0.4,
-            "db_threshold": 60,
-            "required_hits": 3,
-            "required_misses": 24,
-            "smoothing_window": 5
+            "prob_threshold": 0.05,
+            "db_threshold": -5,
+            "required_hits": 1,
+            "required_misses": 15,
+            "smoothing_window": 3
         }
     },
     "llm_engine": {

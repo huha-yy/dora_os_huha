@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html><body>
+<h1>Audit Test v2</h1>
+<script>
+// This test writes results via fetch instead of console.log
+async function report(msg) {
+  try { await fetch('http://localhost:8000/asr', { method:'POST', body: 'TEST:'+msg }); } catch(e) {}
+}
+
+async function run() {
+  report('START ' + navigator.userAgent.substring(0,40));
+  
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    report('getUserMedia OK');
+  } catch(e) {
+    report('getUserMedia FAIL: ' + e.name);
+    return;
+  }
+
+  let ctx;
+  try {
+    ctx = new AudioContext({ sampleRate: 16000 });
+    report('AudioContext: state=' + ctx.state + ' rate=' + ctx.sampleRate);
+    await ctx.resume();
+    report('resume: state=' + ctx.state);
+  } catch(e) {
+    report('AudioContext FAIL: ' + e.message);
+    stream.getTracks().forEach(t => t.stop());
+    return;
+  }
+
+  // Test ScriptProcessorNode
+  let spCalls = 0;
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    const sp = ctx.createScriptProcessor(4096, 1, 1);
+    sp.onaudioprocess = (e) => {
+      spCalls++;
+      if (spCalls === 1) {
+        const d = e.inputBuffer.getChannelData(0);
+        let max = 0, rms = 0;
+        for (let i=0; i<d.length; i++) { let v=Math.abs(d[i]); if(v>max) max=v; rms += d[i]*d[i]; }
+        rms = Math.sqrt(rms/d.length);
+        report('SP #1: max='+max.toFixed(4)+' rms='+rms.toFixed(4)+' len='+d.length);
+      }
+    };
+    src.connect(sp);
+    sp.connect(ctx.destination);
+    report('SP connected, waiting 3s...');
+    await new Promise(r => setTimeout(r, 3000));
+    sp.disconnect();
+    src.disconnect();
+    report('SP result: ' + spCalls + ' callbacks');
+  } catch(e) {
+    report('SP FAIL: ' + e.message);
+  }
+
+  // Test AudioWorklet
+  let awMsgs = 0;
+  try {
+    const code = `
+      class P extends AudioWorkletProcessor {
+        constructor() { super(); this.n = 0; }
+        process(inputs) {
+          const input = inputs[0];
+          if (input && input[0] && input[0].length > 0) {
+            this.n++;
+            if (this.n === 1) {
+              let max = 0, rms = 0;
+              for (let i=0; i<input[0].length; i++) {
+                let v = Math.abs(input[0][i]); if(v>max) max=v; rms += input[0][i]*input[0][i];
+              }
+              rms = Math.sqrt(rms/input[0].length);
+              this.port.postMessage({n:this.n, max:max, rms:rms, len:input[0].length});
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor('p', P);
+    `;
+    const blob = new Blob([code], {type:'application/javascript'});
+    const url = URL.createObjectURL(blob);
+    await ctx.audioWorklet.addModule(url);
+    report('AW addModule OK');
+
+    const src2 = ctx.createMediaStreamSource(stream);
+    const aw = new AudioWorkletNode(ctx, 'p', { numberOfInputs: 1, numberOfOutputs: 0 });
+    aw.port.onmessage = (e) => {
+      awMsgs++;
+      report('AW #'+e.data.n+': max='+(e.data.max||0).toFixed(4)+' rms='+(e.data.rms||0).toFixed(4)+' len='+e.data.len);
+    };
+    src2.connect(aw);
+    report('AW connected, waiting 3s...');
+    await new Promise(r => setTimeout(r, 3000));
+    aw.disconnect();
+    src2.disconnect();
+    report('AW result: ' + awMsgs + ' messages');
+  } catch(e) {
+    report('AW FAIL: ' + e.name + ': ' + e.message);
+  }
+
+  ctx.close();
+  stream.getTracks().forEach(t => t.stop());
+  report('DONE');
+}
+
+setTimeout(run, 500);
+</script>
+</body></html>

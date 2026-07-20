@@ -1,72 +1,19 @@
-# ROS2 build artifacts
-build/
-install/
-log/
-maps/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-*.egg
-
-# Virtual environment
 .venv/
-venv/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-logs/
-*.log
-
-# Temporary files
-*.tmp
-*.bak
-*.backup
-*.old
-
-# Cache
-cache/
-.cache/
-
-# Generated files
+__pycache__/
 *.pyc
 *.pyo
-*.pdf
-*.gv
-
-# Local configuration overrides
-*.local.yaml
-.env
-.env.*
-
-# Maps (optional - uncomment if you don't want to commit maps)
-# maps/*.pgm
-# maps/*.yaml
-# maps/*.png
-
-# Large Models
-*.onnx
-*.pt
-*.rknn
-
-# Zip archives
+models/
+cache/
+logs/
 *.zip
-
-# Perception models (gitignored per README)
-src/perception/models/
+*.mp3
+*.pt
+*.task
+*.wav
+uv.lock
+*.bak
+tmp_clone/
+.DS_Store
+*.egg-info/
+dist/
+build/

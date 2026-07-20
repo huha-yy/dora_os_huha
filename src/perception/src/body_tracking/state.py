@@ -380,7 +380,10 @@ class HumanStatus:
         )
 
     def get_raw_pose(self, person_id: int = 0) -> RawPose:
-        return self.tracking_result.get_person_by_id(0).raw_pose
+        person = self.tracking_result.get_person_by_id(person_id)
+        if person is None:
+            return RawPose.UNKNOWN
+        return person.raw_pose
     
     @property
     def json(self) -> dict:

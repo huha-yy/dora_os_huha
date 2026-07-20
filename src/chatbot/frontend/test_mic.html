@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><body>
+<h1>Mic Test</h1>
+<button id="start">Start</button>
+<pre id="log"></pre>
+<script>
+const log = document.getElementById('log');
+function addLog(msg) { log.textContent += msg + '\n'; }
+
+document.getElementById('start').onclick = async () => {
+  addLog('Starting...');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    addLog('getUserMedia OK, tracks: ' + stream.getAudioTracks().length);
+    
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    addLog('AudioContext state before resume: ' + ctx.state);
+    await ctx.resume();
+    addLog('AudioContext state after resume: ' + ctx.state + ', sampleRate: ' + ctx.sampleRate);
+    
+    const src = ctx.createMediaStreamSource(stream);
+    const sp = ctx.createScriptProcessor(4096, 1, 1);
+    
+    let count = 0;
+    sp.onaudioprocess = (e) => {
+      count++;
+      if (count <= 5) {
+        const data = e.inputBuffer.getChannelData(0);
+        let max = 0;
+        for (let i = 0; i < data.length; i++) {
+          if (Math.abs(data[i]) > max) max = Math.abs(data[i]);
+        }
+        addLog('callback #' + count + ' max=' + max.toFixed(4) + ' samples=' + data.length);
+      }
+    };
+    
+    src.connect(sp);
+    sp.connect(ctx.destination);
+    addLog('Graph connected. Speak now...');
+    
+    setTimeout(() => {
+      addLog('10s result: ' + count + ' callbacks fired');
+      sp.disconnect();
+      ctx.close();
+      stream.getTracks().forEach(t => t.stop());
+    }, 10000);
+  } catch(e) {
+    addLog('ERROR: ' + e.message);
+  }
+};
+</script>
+</body></html>

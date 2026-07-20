@@ -31,6 +31,46 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ROOT="${HOME}/dorabot_ws"
 cd "${ROOT}"
 
+# =============================================================================
+# 清理旧进程：杀掉上一轮残留的 camera / perception / chatbot / orchestrator
+# =============================================================================
+echo -e "${YELLOW}Cleaning up old processes...${NC}"
+
+KILL_PATTERNS=(
+    "run_camera.py"
+    "realsense_publisher_node"
+    "src/perception"
+    "src/chatbot/main.py"
+    "src/orchestrator/main.py"
+    "servo_action.py"
+    "static_transform_publisher.*camera"
+)
+
+KILLED_ANY=false
+for pattern in "${KILL_PATTERNS[@]}"; do
+    pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+        echo "  Killing: $pattern (PIDs: $(echo $pids | tr '\n' ' '))"
+        kill $pids 2>/dev/null || true
+        KILLED_ANY=true
+    fi
+done
+
+if $KILLED_ANY; then
+    sleep 1.5
+    for pattern in "${KILL_PATTERNS[@]}"; do
+        pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+        if [[ -n "$pids" ]]; then
+            echo "  Force killing: $pattern (PIDs: $(echo $pids | tr '\n' ' '))"
+            kill -9 $pids 2>/dev/null || true
+        fi
+    done
+    echo -e "${GREEN}Old processes cleaned.${NC}"
+else
+    echo -e "${GREEN}No old processes found.${NC}"
+fi
+echo
+
 CONFIG="configs/orchestrator/config.yaml"
 while [[ $# -gt 0 ]]; do
     case "$1" in

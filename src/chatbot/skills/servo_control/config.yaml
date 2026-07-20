@@ -1,0 +1,90 @@
+actions:
+  - name: "左转头"
+    keywords:
+      - 左转头
+      - 向左转
+      - 头往左转
+      - 把头往左转
+      - 脑袋左转
+      - 头向左转
+      - 往左转头
+      - 脖子左转
+      - 头朝左边转
+      - 头转向左边
+    type: servo
+    action: head_left
+
+  - name: "右转头"
+    keywords:
+      - 右转头
+      - 向右转
+      - 头往右转
+      - 把头往右转
+      - 脑袋右转
+      - 头向右转
+      - 往右转头
+      - 脖子右转
+      - 头朝右边转
+      - 头转向右边
+    type: servo
+    action: head_right
+
+  - name: "抬头"
+    keywords:
+      - 抬头
+      - 抬起头
+      - 把头抬起来
+      - 脑袋抬起
+      - 往上抬头
+      - 头向上抬
+      - 仰头
+      - 头抬起来
+      - 头往上抬
+      - 仰起头
+    type: servo
+    action: head_up
+
+  - name: "低头"
+    keywords:
+      - 低头
+      - 低下头
+      - 把头低下去
+      - 脑袋低下
+      - 往下低头
+      - 头向下低
+      - 头低下去
+      - 头往下低
+      - 把头低下
+      - 垂下头
+    type: servo
+    action: head_down
+
+  - name: "头回正"
+    keywords:
+      - 头回正
+      - 头摆正
+      - 把头转正
+      - 脑袋摆正
+      - 头转回来
+      - 脖子回正
+      - 头朝前看
+      - 头回中间
+      - 头别歪
+      - 头转正前方
+    type: servo
+    action: head_center_h
+
+  - name: "头平视"
+    keywords:
+      - 头平视
+      - 目视前方
+      - 头摆平
+      - 把头放平
+      - 脑袋放平
+      - 头回水平
+      - 头往正前方看
+      - 头放正
+      - 平视前方
+      - 头别仰也别低
+    type: servo
+    action: head_center_v

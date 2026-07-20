@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><body>
+<h1>Auto Audio Test</h1>
+<pre id="log" style="background:#111;color:#0f0;padding:10px;font-size:12px;"></pre>
+<script>
+const logEl = document.getElementById('log');
+function L(msg) { logEl.textContent += msg + '\n'; }
+
+async function runTests() {
+  L('Chromium: ' + navigator.userAgent.substring(0,60));
+  L('');
+
+  // Test 1: getUserMedia
+  L('=== Test 1: getUserMedia ===');
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    L('PASS: getUserMedia OK');
+  } catch(e) {
+    L('FAIL: ' + e.name + ': ' + e.message);
+    return;
+  }
+
+  // Test 2: AudioContext + resume
+  L('');
+  L('=== Test 2: AudioContext ===');
+  let ctx;
+  try {
+    ctx = new AudioContext({ sampleRate: 16000 });
+    L('Created, state=' + ctx.state + ' rate=' + ctx.sampleRate);
+    await ctx.resume();
+    L('After resume: state=' + ctx.state);
+  } catch(e) {
+    L('FAIL: ' + e.message);
+    stream.getTracks().forEach(t => t.stop());
+    return;
+  }
+
+  // Test 3: ScriptProcessorNode (deprecated)
+  L('');
+  L('=== Test 3: ScriptProcessorNode ===');
+  let spCalls = 0;
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    const sp = ctx.createScriptProcessor(4096, 1, 1);
+    sp.onaudioprocess = (e) => {
+      spCalls++;
+      if (spCalls <= 3) {
+        const d = e.inputBuffer.getChannelData(0);
+        let max = 0;
+        for (let i=0; i<d.length; i++) if (Math.abs(d[i])>max) max=Math.abs(d[i]);
+        L('  SP callback #' + spCalls + ': max=' + max.toFixed(4));
+      }
+    };
+    src.connect(sp);
+    sp.connect(ctx.destination);
+    L('ScriptProcessorNode created, waiting 3s...');
+    await new Promise(r => setTimeout(r, 3000));
+    sp.disconnect();
+    src.disconnect();
+    if (spCalls > 0) {
+      L('PASS: ScriptProcessorNode fired ' + spCalls + ' callbacks');
+    } else {
+      L('FAIL: ScriptProcessorNode fired 0 callbacks!');
+    }
+  } catch(e) {
+    L('FAIL: ' + e.message);
+  }
+
+  // Test 4: AudioWorklet
+  L('');
+  L('=== Test 4: AudioWorklet ===');
+  let awCalls = 0;
+  try {
+    const workletCode = `
+      class TestProcessor extends AudioWorkletProcessor {
+        constructor() { super(); this.n = 0; }
+        process(inputs) {
+          const input = inputs[0];
+          if (input && input[0] && input[0].length > 0) {
+            this.n++;
+            if (this.n <= 3) {
+              let max = 0;
+              for (let i=0; i<input[0].length; i++)
+                if (Math.abs(input[0][i]) > max) max = Math.abs(input[0][i]);
+              this.port.postMessage({count: this.n, max: max});
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor('test-proc', TestProcessor);
+    `;
+    const blob = new Blob([workletCode], {type:'application/javascript'});
+    const url = URL.createObjectURL(blob);
+    await ctx.audioWorklet.addModule(url);
+    L('addModule OK');
+
+    const src2 = ctx.createMediaStreamSource(stream);
+    const aw = new AudioWorkletNode(ctx, 'test-proc', {
+      numberOfInputs: 1, numberOfOutputs: 0
+    });
+    
+    aw.port.onmessage = (e) => {
+      awCalls++;
+      L('  AW callback #' + e.data.count + ': max=' + (e.data.max||0).toFixed(4));
+    };
+
+    src2.connect(aw);
+    L('AudioWorklet created, waiting 3s...');
+    await new Promise(r => setTimeout(r, 3000));
+    aw.disconnect();
+    src2.disconnect();
+    
+    if (awCalls > 0) {
+      L('PASS: AudioWorklet fired ' + awCalls + ' callbacks');
+    } else {
+      L('FAIL: AudioWorklet fired 0 callbacks!');
+    }
+  } catch(e) {
+    L('FAIL: ' + e.name + ': ' + e.message);
+  }
+
+  // Cleanup
+  L('');
+  L('=== DONE ===');
+  ctx.close();
+  stream.getTracks().forEach(t => t.stop());
+}
+
+// Auto-start after a short delay
+setTimeout(runTests, 500);
+</script>
+</body></html>
