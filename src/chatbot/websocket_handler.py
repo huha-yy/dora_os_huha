@@ -389,24 +389,27 @@ class WebSocketHandler:
             try:
                 text = await context.asr_engine.async_transcribe_np(audio_buffer)
                 logger.info(f"Transcribed: {text}")
-                
+
                 if text and text.strip():
                     user_text = text.strip()
 
-                    # ── 唤醒词检查 ──
-                    # 必须以"小戴"开头才响应，保留完整原话不做截断
-                    if not (user_text.startswith("小戴小戴") or user_text.startswith("小戴")):
-                        logger.info(f"未检测到唤醒词, 忽略: {user_text}")
-                        return  # 静默，不回复不动
+                    # 中文过滤: 不含中文的直接丢弃 (e.g. "The", "First", ".")
+                    if not re.search(r'[一-鿿]', user_text):
+                        logger.info(f"非中文识别, 忽略: {user_text}")
+                        return
 
                     await websocket.send_json({
                         "type": "user-transcription",
                         "text": user_text,
                     })
 
-                    # 检查机械臂 Skill 关键词匹配
+                    # 检查机械臂 Skill 关键词匹配 (openarm 轨迹)
                     arm_skill = getattr(context, "arm_skill", None)
                     matched_action = arm_skill.match(user_text) if arm_skill else None
+
+                    # 检查手臂舵机 Skill 关键词匹配 (ID 6-13 预设)
+                    arm_servo_skill = getattr(context, "arm_servo_skill", None)
+                    matched_arm_servo = arm_servo_skill.match(user_text) if arm_servo_skill else None
 
                     # 检查舵机 Skill 关键词匹配
                     servo_skill = getattr(context, "servo_skill", None)
@@ -418,6 +421,9 @@ class WebSocketHandler:
 
                     if matched_action:
                         ok, msg = arm_skill.execute(matched_action)
+                        robot_response = msg
+                    elif matched_arm_servo:
+                        ok, msg = arm_servo_skill.execute(matched_arm_servo)
                         robot_response = msg
                     elif matched_servo:
                         ok, msg = servo_skill.execute(matched_servo)

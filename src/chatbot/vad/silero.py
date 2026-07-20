@@ -15,7 +15,7 @@ class SileroVADConfig(BaseModel):
     orig_sr: int = 16000
     target_sr: int = 16000
     prob_threshold: float = 0.4
-    db_threshold: int = 60
+    db_threshold: int = -100
     required_hits: int = 3  # 3 * (0.032) = 0.1s
     required_misses: int = 24  # 24 * (0.032) = 0.8s
     smoothing_window: int = 5
@@ -27,7 +27,7 @@ class VADEngine(VADInterface):
         orig_sr: int = 16000,
         target_sr: int = 16000,
         prob_threshold: float = 0.4,
-        db_threshold: int = 60,
+        db_threshold: int = -100,
         required_hits: int = 3,
         required_misses: int = 24,
         smoothing_window: int = 5,
@@ -119,7 +119,7 @@ class StateMachine:
 
     def get_smoothed_values(self, prob, db):
         self.prob_window.append(prob)
-        self.db_window.append(db)
+        self.db_window.append(max(db, -100.0))
         smoothed_prob = np.mean(self.prob_window)
         smoothed_db = np.mean(self.db_window)
         return smoothed_prob, smoothed_db
@@ -134,10 +134,7 @@ class StateMachine:
 
         if self.state == State.IDLE:
             self.pre_buffer.append(chunk_bytes)
-            if (
-                smoothed_prob >= self.prob_threshold
-                and smoothed_db >= self.db_threshold
-            ):
+            if smoothed_prob >= self.prob_threshold:
                 self.hit_count += 1
                 if self.hit_count >= self.required_hits:
                     self.state = State.ACTIVE
@@ -149,10 +146,7 @@ class StateMachine:
 
         elif self.state == State.ACTIVE:
             self.update(chunk_bytes, smoothed_prob, smoothed_db)
-            if (
-                smoothed_prob >= self.prob_threshold
-                and smoothed_db >= self.db_threshold
-            ):
+            if smoothed_prob >= self.prob_threshold:
                 self.miss_count = 0
             else:
                 self.miss_count += 1
@@ -162,10 +156,7 @@ class StateMachine:
 
         elif self.state == State.INACTIVE:
             self.update(chunk_bytes, smoothed_prob, smoothed_db)
-            if (
-                smoothed_prob >= self.prob_threshold
-                and smoothed_db >= self.db_threshold
-            ):
+            if smoothed_prob >= self.prob_threshold:
                 self.hit_count += 1
                 if self.hit_count >= self.required_hits:
                     self.state = State.ACTIVE

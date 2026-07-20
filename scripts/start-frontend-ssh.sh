@@ -88,6 +88,10 @@ nohup chromium-browser \
     --app="$URL" \
     --user-data-dir="$PROFILE_DIR" \
     --autoplay-policy=no-user-gesture-required \
+    --use-fake-ui-for-media-stream \
+    --no-sandbox \
+    --enable-features=AllowSyncXHRInPageDismissal \
+    --disable-features=MediaStreamVisibilityBrowsertest \
     --disable-infobars \
     --no-first-run \
     --no-default-browser-check \

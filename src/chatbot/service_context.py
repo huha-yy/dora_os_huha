@@ -32,6 +32,12 @@ except Exception as e:
     logger.warning(f"Failed to import ChassisControlSkill: {e}")
     ChassisControlSkill = None
 
+try:
+    from skills.arm_servo.skill import ArmServoSkill
+except Exception as e:
+    logger.warning(f"Failed to import ArmServoSkill: {e}")
+    ArmServoSkill = None
+
 _CHATBOT_ROOT = Path(__file__).parent
 
 
@@ -66,6 +72,7 @@ class ServiceContext:
         self.arm_skill = None
         self.servo_skill = None
         self.chassis_skill = None
+        self.arm_servo_skill = None
         self.system_prompt: str = ""
         self.max_history_turns: int = 8
 
@@ -129,6 +136,15 @@ class ServiceContext:
             except Exception as e:
                 logger.warning(f"[ServiceContext] ChassisControlSkill 初始化失败: {e}")
                 self.chassis_skill = None
+
+        if ArmServoSkill is not None:
+            try:
+                self.arm_servo_skill = ArmServoSkill()
+                logger.info(f"[ServiceContext] ArmServoSkill 已加载: "
+                            f"{len(self.arm_servo_skill.actions)} 个动作")
+            except Exception as e:
+                logger.warning(f"[ServiceContext] ArmServoSkill 初始化失败: {e}")
+                self.arm_servo_skill = None
 
     def init_asr(self, asr_config: Dict[str, Any]) -> ASRInterface:
         """Initialize the ASR engine"""

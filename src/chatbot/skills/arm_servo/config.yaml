@@ -1,0 +1,48 @@
+# =============================================================================
+# 手臂舵机语音控制 - 动作配置
+# type: arm_preset — 发布预设名称到 /arm_cmd 话题
+# =============================================================================
+
+actions:
+  - name: "手臂归位"
+    keywords:
+      - 手臂归位
+      - 手臂回零
+      - 手回原位
+      - 手臂复位
+      - 手臂回去
+      - 手收回去
+      - 手放下来
+    type: arm_preset
+    preset: home
+
+  - name: "拥抱"
+    keywords:
+      - 拥抱
+      - 抱一下
+      - 抱抱
+      - 抱一个
+      - 来抱抱
+      - 给我抱抱
+    type: arm_preset
+    preset: hug
+
+  - name: "举右手"
+    keywords:
+      - 举右手
+      - 抬右手
+      - 右手举起来
+      - 把右手举起来
+      - 挥右手
+    type: arm_preset
+    preset: raise_right
+
+  - name: "举左手"
+    keywords:
+      - 举左手
+      - 抬左手
+      - 左手举起来
+      - 把左手举起来
+      - 挥左手
+    type: arm_preset
+    preset: raise_left

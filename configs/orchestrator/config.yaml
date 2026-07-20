@@ -26,14 +26,14 @@ perception:
   debug_video_path: null  # Path to debug video file (null for real camera)
   print_fps: true
   process_every_n: 2  # Run YOLO + pose every 2nd frame; skipped frames reuse last overlay
-  detection_model_name: yolo11n_rknn_model  # NPU (RK3588); use yolov8n.pt for CPU fallback
+  detection_model_name: yolov8n.pt  # CPU fallback (RKNPU model not available yet)
 
 camera:
   # Depth off while mapping/SLAM are disabled; set true (or enable map services) later.
   align_depth: false
-  # Robot display is 1024×600; video panel renders ~588×441 — 424×240 is enough.
-  width: 424
-  height: 240
+  # Robot display is 1024×600; video panel renders ~588×441.
+  width: 640
+  height: 480
   fps: 15
   # D415 is mounted upside down on this robot — flip images and publish mount TF.
   flip_180: true
