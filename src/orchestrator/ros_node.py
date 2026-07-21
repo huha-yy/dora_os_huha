@@ -84,6 +84,16 @@ class DorabotOrchestratorNode(Node):
             self.logger.warn(
                 f"Annotated-frame bridge unavailable ({exc}); video stream disabled."
             )
+        # Health metrics bridge.
+        from orchestrator.web_server.health_bus import health_bus
+        self._health_bus = health_bus
+
+        self._health_sub = self.create_subscription(
+            String, "/health/metrics", self._health_metrics_cb, 10
+        )
+        self._scan_cmd_pub = self.create_publisher(String, "/health/scan_cmd", 10)
+        self.create_timer(0.2, self._drain_scan_cmd)
+
         self.robot_state = RobotState()
         self.scheduler = AsyncScheduler()
         self.scheduler.start()
@@ -111,6 +121,20 @@ class DorabotOrchestratorNode(Node):
                 frame_bus.set_jpeg(buf.tobytes())
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.debug(f"Failed to encode annotated frame: {exc}")
+
+    def _health_metrics_cb(self, msg: String) -> None:
+        try:
+            self._health_bus.set_metrics(json.loads(msg.data or "{}"))
+        except (ValueError, TypeError):
+            pass
+
+    def _drain_scan_cmd(self) -> None:
+        cmd = self._health_bus.take_cmd()
+        if not cmd:
+            return
+        out = String()
+        out.data = json.dumps(cmd)
+        self._scan_cmd_pub.publish(out)
 
     def _fall_callback(self, msg: String) -> None:
         """

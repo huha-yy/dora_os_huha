@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..routers import events, actions
+from ..routers import events, actions, health
 from .frame_bus import frame_bus
 
 UI_DIR = Path(__file__).parent / "ui"
@@ -41,9 +41,10 @@ def create_app() -> FastAPI:
 
     app.include_router(events.router, prefix="/events", tags=["events"])
     app.include_router(actions.router, prefix="/actions", tags=["actions"])
+    app.include_router(health.router, prefix="/health", tags=["health"])
 
     @app.get("/health")
-    async def health():
+    async def health_check():
         return {"status": "ok"}
 
     @app.get("/video/status")

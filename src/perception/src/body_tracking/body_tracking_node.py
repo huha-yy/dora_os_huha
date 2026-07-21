@@ -3,20 +3,30 @@ import os
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from geometry_msgs.msg import Point
 from cv_bridge import CvBridge
 import cv2
 from rclpy.time import Time
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import click
 import numpy as np
 from tqdm import tqdm
 from .body_detector import BodyDetector
+from .health import (
+    RPPGEstimator, ScanController, HealthConfig, RgbSample, ScanState, build_metrics,
+    describe_complexion, evaluate_gates, motion_metric, illumination_metric,
+    chroma_drift_metric, exposure_stable_for, is_scan_locked,
+    window_captured_under_lock, FAIL_CLOSED,
+)
+from .health.roi_detector import FaceRoiExtractor
+from .health.roi import sample_mean_rgb, roi_pixel_count, roi_centroid
+from .pose_face_roi import pose_face_roi
 from .state import FrameTrackingResult, RawPose, HumanStatus
 from collections import deque
 import logging
 import json
+import uuid
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -111,6 +121,74 @@ class BodyTrackingNode(Node):
         self.last_human_status = HumanStatus.create_dummy()
         self.node_up_time = datetime.now().timestamp()
         self.mock_fall_detection = mock_fall_detection
+        # --- Health metrics (rPPG) ---
+        # A bad health config must never take down this node: it also runs
+        # safety-critical fall detection. HealthConfig.from_dict is strict by design
+        # (a typo'd gate key is a safety bug, so it raises) -- but the right response
+        # to a bad HEALTH_BACKEND is a loud log and a disabled demo feature, not a
+        # dead fall detector.
+        try:
+            self.health_config = HealthConfig.from_dict({
+                "enabled": os.getenv("HEALTH_ENABLED", "1") != "0",
+                "backend": os.getenv("HEALTH_BACKEND", "pos"),
+                # Default to the pose-derived ROI: the on-device FPS test (2026-07-18)
+                # measured the per-frame MediaPipe face detector at a 19-34% hit to
+                # fall-detection FPS, over the 15% budget. pose_fallback reuses the pose
+                # landmarks already computed for fall detection, so no second detector
+                # runs. Override with HEALTH_DETECTOR=mediapipe_face for the sharper ROI
+                # where the FPS headroom exists.
+                "detector": os.getenv("HEALTH_DETECTOR", "pose_fallback"),
+            })
+        except ValueError as exc:
+            self.get_logger().error(
+                f"Invalid health config ({exc}). Health metrics DISABLED; "
+                f"fall detection continues."
+            )
+            self.health_config = HealthConfig(enabled=False)
+        self._health_last_roi = None
+        self._health_last_mean = None
+        self._health_roi_age = 999
+        self._health_last_frame_t = 0.0
+        self._health_scan_result = None
+        self._health_last_scan_state = None
+        if self.health_config.enabled:
+            # Only build the MediaPipe face detector when it will actually be used --
+            # constructing it in pose_fallback mode would load a graph we never call.
+            self._roi_extractor = (
+                FaceRoiExtractor()
+                if self.health_config.detector == "mediapipe_face"
+                else None
+            )
+            self._rppg = RPPGEstimator(self.health_config)
+            self._scan = ScanController(
+                target_clean_s=self.health_config.scan_window_s,
+                timeout_s=self.health_config.scan_timeout_s,
+            )
+            self.health_pub = self.create_publisher(String, "/health/metrics", 10)
+            self.scan_cmd_sub = self.create_subscription(
+                String, "/health/scan_cmd", self._on_scan_cmd, 10
+            )
+            # Scan-scoped camera lock (Task 16c). This node decides WHEN to lock (from
+            # scan state); the RealSense publisher, which owns the sensor, applies it and
+            # reports the VERIFIED state back. Latched QoS so state survives a late join.
+            lock_qos = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.camera_lock_pub = self.create_publisher(
+                Bool, "/health/camera_lock", lock_qos
+            )
+            self.camera_lock_state_sub = self.create_subscription(
+                String, "/health/camera_lock_state", self._on_camera_lock_state, lock_qos
+            )
+            self._camera_lock_state = None
+            self._camera_lock_state_t = 0.0
+            self._camera_lock_since = None  # when the current unbroken lock began
+            self.create_timer(1.0, self._on_health_timer)
+            self.get_logger().info("Health metrics (rPPG) enabled")
+
         self.get_logger().info(
             "BodyTrackingNode started (process_every_n=%d), waiting for images..."
             % self.process_every_n
@@ -330,10 +408,229 @@ class BodyTrackingNode(Node):
         except Exception as exc:  # pragma: no cover - defensive
             self.get_logger().warn(f"Failed to publish annotated frame: {exc}")
 
+    def _update_health_roi(self, frame: np.ndarray, tracking_result) -> None:
+        if self.health_config.detector == "pose_fallback":
+            roi = self._roi_from_pose_landmarks(frame, tracking_result)
+        else:
+            roi = self._roi_extractor.update(frame)
+        if roi is None:
+            self._health_last_roi = None
+            return
+        self._health_last_roi = roi
+        self._health_roi_age = 0
+
+    def _roi_from_pose_landmarks(self, frame: np.ndarray, tracking_result):
+        """Face ROI from the pose landmarks already computed for fall detection -- the
+        FPS-budget path (no second MediaPipe graph). Extraction lives in the ROS-free,
+        unit-tested pose_face_roi()."""
+        h, w = frame.shape[:2]
+        return pose_face_roi(tracking_result, w, h)
+
+    def _sample_health_roi(self, frame: np.ndarray, t_sec: float) -> None:
+        self._health_roi_age += 1
+        if self._health_roi_age > self.process_every_n * 5:
+            self._health_last_roi = None
+        roi = self._health_last_roi
+        if roi is None:
+            self._health_last_mean = None
+            return
+        sample = sample_mean_rgb(frame, roi)
+        if sample is None:
+            self._health_last_mean = None
+            return
+        r, g, b = sample
+        self._health_last_mean = (r, g, b, roi.face_px, roi_pixel_count(frame, roi))
+        # Carry the ROI geometry on the sample: the motion gate measures how far
+        # the face wanders across the analysis window, and fails closed without it.
+        centroid = roi_centroid(roi)
+        cx, cy = centroid if centroid is not None else (None, None)
+        self._rppg.add_sample(RgbSample(
+            t=t_sec, r=r, g=g, b=b, cx=cx, cy=cy, w=float(roi.face_px),
+        ))
+
+    def _on_scan_cmd(self, msg: String) -> None:
+        try:
+            cmd = json.loads(msg.data or "{}")
+        except (ValueError, TypeError):
+            return
+        if not isinstance(cmd, dict):
+            return
+        now = self.get_clock().now().nanoseconds / 1e9
+        action = cmd.get("action")
+        if action == "start":
+            mid = cmd.get("measurement_id") or str(uuid.uuid4())
+            # Honour the requested window. The orchestrator validates it (5-120s);
+            # anything unusable here falls back to the configured target rather than
+            # silently running a scan of a length nobody asked for.
+            try:
+                window_s = float(cmd.get("window_s"))
+            except (TypeError, ValueError):
+                window_s = None
+            if window_s is not None and not (0.0 < window_s <= 600.0):
+                window_s = None
+            self._scan.start(mid, now, target_clean_s=window_s)
+        elif action == "cancel":
+            self._scan.cancel(now)
+
+    def _on_camera_lock_state(self, msg: String) -> None:
+        try:
+            state = json.loads(msg.data or "{}")
+        except (ValueError, TypeError):
+            return
+        if isinstance(state, dict):
+            self._camera_lock_state = state
+            self._camera_lock_state_t = self.get_clock().now().nanoseconds / 1e9
+
+    def _camera_locked(self, ros_now: float) -> bool:
+        """Whether the camera is VERIFIED locked for a scan right now. Fails closed: a
+        missing or stale report from the RealSense publisher counts as not-locked, so a
+        scan withholds rather than trusting a lock we have not heard confirmed.
+
+        Uses is_scan_locked (both auto controls verified off), NOT the ambiguous
+        `locked` field, which a partial auto-restore also sets."""
+        if ros_now - self._camera_lock_state_t > 3.0:  # publisher republishes at 1 Hz
+            return False
+        return is_scan_locked(self._camera_lock_state)
+
+    def _on_health_timer(self) -> None:
+        ros_now = self.get_clock().now().nanoseconds / 1e9
+
+        # Request the scan-scoped camera lock: the RealSense publisher engages AE/AWB
+        # lock while a scan is in progress and restores auto otherwise. Idempotent on
+        # the publisher side, so republishing every tick is cheap and self-healing.
+        scan_active = self._scan.is_active
+        lock_msg = Bool()
+        lock_msg.data = scan_active
+        self.camera_lock_pub.publish(lock_msg)
+
+        # Track when the current unbroken verified lock began, so exposure_stable can
+        # require the WHOLE analysis window to have been captured under lock -- not just
+        # the camera to be locked at this instant (the window still holds pre-lock,
+        # auto-AE/AWB frames for the first window_s after a lock or a relock).
+        #
+        # Two clocks, both ROS system time but offset by stream latency:
+        #  - lock_since = ros_now, the lock-REPORT time. The report arrives only after the
+        #    publisher applied the lock, so this is never BEFORE the physical lock --
+        #    stamping it with the (possibly older, pre-lock) last frame time would
+        #    backdate the lock and admit contaminated frames.
+        #  - the window END is compared using _health_last_frame_t, where the estimator
+        #    window actually ends.
+        # Requiring last_frame_t - window_s >= lock_since is then a sound, conservative
+        # check: every sample in the window was captured at or after a time known to be
+        # post-lock. Under lag it simply waits window_s + lag before trusting a scan.
+        if self._camera_locked(ros_now):
+            if self._camera_lock_since is None:
+                self._camera_lock_since = ros_now
+        else:
+            self._camera_lock_since = None
+
+        have_face = self._health_last_roi is not None and self._health_last_mean is not None
+
+        frame_age = ros_now - self._health_last_frame_t if self._health_last_frame_t > 0 else 99.0
+        stale = frame_age > 5.0
+
+        window_s = self.health_config.ambient_window_s
+        # Every gate component is derived from the sample window alone, so the gates
+        # are evaluated BEFORE the estimate. `estimate()` is stateful (it commits the
+        # HR hysteresis anchor), and a rejected window must never be allowed to
+        # contaminate it -- see RPPGEstimator.estimate().
+        if stale:
+            fps = 0.0
+            have_face = False
+            drop_ratio = 1.0
+            jitter_ms = 999.0
+            motion = FAIL_CLOSED
+            illum_delta = FAIL_CLOSED
+            chroma_drift = FAIL_CLOSED
+        else:
+            fps = self._rppg.effective_fps(self._health_last_frame_t, window_s)
+            win = self._rppg.window(self._health_last_frame_t, window_s)
+            motion = motion_metric(win)
+            illum_delta = illumination_metric(win)
+            chroma_drift = chroma_drift_metric(win)
+            if len(win) >= 2:
+                intervals = np.diff([s.t for s in win])
+                jitter_ms = float(np.std(intervals)) * 1000.0 if len(intervals) > 1 else 0.0
+                expected = int(fps * window_s) if fps > 0 else len(win)
+                drop_ratio = max(0.0, 1.0 - len(win) / max(expected, 1))
+            else:
+                drop_ratio = 0.0
+                jitter_ms = 0.0
+
+        face_px = self._health_last_mean[3] if have_face else 0
+        roi_px = self._health_last_mean[4] if have_face else 0
+        components = {
+            "face_present": have_face,
+            "single_target": have_face,
+            "roi_in_bounds": have_face,
+            "face_px": face_px,
+            "roi_px": roi_px,
+            "effective_fps": fps,
+            "drop_ratio": drop_ratio,
+            "jitter_ms": jitter_ms,
+            "motion": motion,
+            "illum_delta": illum_delta,
+            # illum_delta is BLIND to auto-white-balance drift: AWB re-mixes R/G/B
+            # while holding brightness roughly constant, and POS/CHROM read exactly
+            # those ratios. Measured on the D415: a cold AWB transient drove B/G 7.5%
+            # while illum_delta stayed UNDER its gate. This is that gate.
+            "chroma_drift": chroma_drift,
+            # Ambient runs on auto AE/AWB and leans on chroma_drift/illum_delta above;
+            # a scan is stable only once the lock has covered the FULL analysis window
+            # (not merely the current instant). See exposure_stable_for.
+            "exposure_stable": exposure_stable_for(
+                scan_active,
+                window_captured_under_lock(
+                    self._camera_locked(ros_now), self._camera_lock_since,
+                    self._health_last_frame_t, window_s,
+                ),
+            ),
+        }
+        gate = evaluate_gates(components, self.health_config.gates)
+
+        # A failed gate short-circuits inside estimate() and resets the hysteresis;
+        # when stale, `face_present` is False, so the gate has already failed.
+        est = self._rppg.estimate(self._health_last_frame_t, window_s, gate_ok=gate.ok)
+
+        show_est = est if (gate.ok and est is not None) else None
+        prev_state = self._scan.state
+        self._scan.update(ros_now, gate.ok and est is not None and est.hr_bpm is not None)
+
+        if self._scan.state == ScanState.COMPLETE and prev_state != ScanState.COMPLETE:
+            self._health_scan_result = show_est
+
+        _all_scan_states = {"warming", "collecting", "insufficient_quality", "complete", "failed", "cancelled"}
+        mode = (
+            "scan"
+            if self._scan.measurement_id is not None
+            and self._scan.state.value in _all_scan_states
+            else "ambient"
+        )
+
+        publish_est = self._health_scan_result if self._scan.state == ScanState.COMPLETE else show_est
+
+        complexion = None
+        if self.health_config.complexion_enabled and have_face:
+            complexion = describe_complexion(self._health_last_mean[:3])
+
+        msg = String()
+        msg.data = json.dumps(build_metrics(
+            ts=ros_now, mode=mode, state=self._scan.state, effective_fps=fps,
+            window_s=window_s, estimate=publish_est, quality_components=components,
+            complexion=complexion, reason=gate.reason,
+            scan_progress_s=self._scan.progress_clean_s,
+            scan_target_s=self.health_config.scan_window_s,
+        ))
+        self.health_pub.publish(msg)
+
     def image_callback(self, msg: Image):
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         stamp = Time.from_msg(msg.header.stamp)
         self._print_fps(stamp)
+
+        if getattr(self, "health_config", None) and self.health_config.enabled:
+            self._health_last_frame_t = stamp.nanoseconds / 1e9
+            self._sample_health_roi(cv_image, self._health_last_frame_t)
 
         self._frame_counter += 1
         if (
@@ -346,6 +643,7 @@ class BodyTrackingNode(Node):
 
         # Draw overlays when we are saving a debug video OR streaming to the UI.
         draw_overlays = self.debug or self.publish_annotated
+
         tracking_result = self.body_detector.detect(
             cv_image,
             frame_timestamp_ms=int(stamp.nanoseconds / 1e6),
@@ -369,6 +667,9 @@ class BodyTrackingNode(Node):
         self._last_annotated = annotated
         self._last_fall_msg = fall_msg
         self._publish_annotated(annotated, fall_msg)
+
+        if getattr(self, "health_config", None) and self.health_config.enabled:
+            self._update_health_roi(cv_image, tracking_result)
 
         tracking_result.debug_frame = None
         self.tracking_results.append(tracking_result)
