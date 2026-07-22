@@ -77,6 +77,17 @@ cd src/perception && PYTHONPATH= /extra_space/dorabot_ws/.venv/bin/python -m pyt
 - **`src/perception/src/body_tracking/health/` MUST NOT import `rclpy`,
   `cv_bridge`, or any ROS module.** It is pure Python so it is unit-testable
   off-robot. ROS lives only in `body_tracking_node.py` and the orchestrator.
+- **TODO (structural, non-urgent):** promote `health/` to a sibling Python
+  package `src/perception/src/vitals/` (peer of `body_tracking/`), not a
+  subpackage. The DSP core (`config, estimator, backends, artifacts, roi, scan,
+  types`) depends on neither body_tracking nor ROS, so the current nesting
+  misstates the dependency graph and the name "health" is ambiguous
+  (person vitals vs system health). When moving: leave `pose_face_roi.py` on the
+  body_tracking side — it's the bridge that imports `body_tracking.state` — and
+  consider pushing `camera.py` (sensor lock) toward the camera node. Mechanical
+  rename only (import root + `tests/health` paths + setup packages); no logic
+  changes. **Defer until `dev` settles** — do not churn a freshly-merged shared
+  branch while the arm/AGV team is active on it.
 - No PyTorch, no JAX. The Pi runs YOLO on the NPU; everything else is CPU numpy/scipy.
 - Do not run heavy work in the perception image callback — it is the hot path
   shared with **safety-critical fall detection**. Estimation belongs on a timer.
