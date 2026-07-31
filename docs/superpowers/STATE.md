@@ -3,21 +3,62 @@
 > Read this first, then reconcile it against `git log --oneline -20`.
 > Commits are ground truth; this file is a derived view that can go stale.
 
-**Branch:** `feat/camera-health-metrics`
-**Last updated:** 2026-07-12
+**Branch:** `dev-integration` (tracks `dora_os/dev`)
+**Last updated:** 2026-07-31
+
+---
+
+## ⏸️ RESUME HERE (picking up on another PC)
+
+**Current work: P2 — Human Follow (跟随模式). Design spec is written, reviewed, and
+committed. Next step is the implementation plan.**
+
+To resume from a fresh clone:
+
+```bash
+git clone <dora_os> && cd dora_os
+git checkout dev            # dora_os/dev has everything below
+# read the spec, then write the plan:
+#   docs/superpowers/specs/2026-07-30-human-follow-design.md
+```
+
+Then invoke the **writing-plans** skill against that spec to produce
+`docs/superpowers/plans/2026-07-30-human-follow.md`. The spec's §15 already gives
+the intended phasing (twist_mux arbitration first → perception target_state →
+human_follow control core → voice/UI/gamepad → on-device bring-up).
+
+**Open design questions the human flagged before writing the plan** (spec §6.2/§15):
+speed/standoff cap values; whether to build twist_mux arbitration first vs. a
+bench-only follow spike first. Decide these when writing the plan.
 
 ---
 
 ## Active plan
 
-**P1 — Camera-based health metrics (rPPG heart rate)**
+**P2 — Human Follow (跟随模式)** — *design phase, spec committed `659761b` (2026-07-30)*
+
+- Spec: `docs/superpowers/specs/2026-07-30-human-follow-design.md`
+- Plan: *not yet written* — this is the next step.
+
+Voice-activated (Chinese) human-follow on the holonomic base. Locks the
+nearest-centered person, holds a ~1.2 m standoff, stops on ambiguity/loss/command.
+Went through a Codex design review (**BLOCKER** verdict, all four resolved in the
+spec §13): twist_mux arbitration (no direct `/cmd_vel`), a real IDs+Kalman tracker
+with stop-on-ambiguity, depth-ready handshake (no on-demand depth toggle), and
+gamepad hard-stop + demo caps. Supervised/demo-grade v1.
+
+**P1 — Camera-based health metrics (rPPG heart rate)** — ✅ **MERGED to `dev` and `main`
+(2026-07-21, merge `512f069`, PR #1 `32b9f7c`).**
 
 - Spec: `docs/superpowers/specs/2026-07-10-camera-health-metrics-design.md`
 - Plan: `docs/superpowers/plans/2026-07-10-camera-health-metrics.md` (18 tasks + 15b)
 
-Adds a non-medical camera heart-rate readout (classical POS/CHROM rPPG, no
-training data, CPU-only) plus an appearance-only complexion card, shown as a
-live overlay and an on-demand 30s scan in the monitor UI.
+Non-medical camera heart-rate readout (POS/CHROM rPPG, CPU-only) + appearance-only
+complexion card. All tasks landed; validated on the real D415 and on the Orange Pi
+(pose-fallback ROI keeps fall-detection FPS within budget). **Still deferred:** the
+lighting/exposure fix (a backlit/dim face underexposes and is correctly *withheld*
+rather than read) — a spot-meter-then-lock closed loop was proven viable but not
+wired. Full P1 detail is preserved below.
 
 ---
 
