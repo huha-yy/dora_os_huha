@@ -68,6 +68,13 @@
 
 ## 关键决策记录
 
+### 2026-09-01
+| # | 决策 | 原因 |
+|---|------|------|
+| 1 | **scservo_sdk 收编进仓库 `board/ST32XX/scservo_sdk/`** | 此前 SDK 只存在于机器人 `~/ST32XX`，靠 sys.path 加载，新板子部署会静默落入 pyserial 回退通道；收编后 clone 即用。来源为团队调试副本（`底盘\scservo_sdk`，含 2025-05 / 2026-01 本地修改，详见该目录 README） |
+| 2 | **chassis_ros_node 查找顺序：仓库内 board/ST32XX 优先，~/ST32XX 兜底** | 仓库为唯一事实源；机器人现有布局不受影响 |
+| 3 | **scan.py / change_id.py 同步改为仓库内查找** | 原 `sys.path.append("..")` 在仓库目录结构下落空 |
+
 ### 2026-07-09
 
 | # | 决策 | 原因 |

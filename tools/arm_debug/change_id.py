@@ -17,7 +17,8 @@ else:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return ch
 
-sys.path.append("..")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "board", "ST32XX"))  # 仓库内置 SDK
+sys.path.append("..")  # 兼容: SDK 在上级目录的旧用法
 from scservo_sdk import *
 
 # Default setting

@@ -14,8 +14,10 @@ import sys
 import time
 import logging
 
-# 确保能找到 orangepi 上的 scservo_sdk
+# scservo_sdk 查找: 1) 仓库内置 board/ST32XX/ (新板子 clone 即用)  2) 机器人 ~/ST32XX (旧布局兼容)
+_HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.expanduser("~/ST32XX"))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "board", "ST32XX"))
 
 import rclpy
 from rclpy.node import Node

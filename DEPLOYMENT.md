@@ -70,6 +70,14 @@ The MiniMax API key is read from **`MINIMAX_API_KEY` in `~/.bashrc`**
 (`config.json` has `"api_key": null`). The start scripts source bashrc when
 needed so non-interactive launches still pick it up.
 
+### 5. Servo SDK (ST3215/ST3250) — vendored, nothing to install
+The Feetech `scservo_sdk` (SMS_STS/SCS protocol) is vendored at
+`board/ST32XX/scservo_sdk/`. `chassis_ros_node.py` finds it automatically
+(repo-relative path first, then the legacy `~/ST32XX` layout), so a fresh
+clone drives the servos out of the box — no need to seed `~/ST32XX` by hand.
+System deps only: ROS 2 and `python3-serial` (pyserial, used by the fallback
+path when the SDK is missing).
+
 ---
 
 ## Run everything
