@@ -206,3 +206,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# 感知模型随仓库分发（例外放行，见 models/README.md）
+!/models/
+!/models/*.pt
+!/models/*.task
