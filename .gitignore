@@ -19,6 +19,12 @@ dist/
 build/
 *.rknn
 
+# 感知模型随仓库分发（大文件惯例的例外，见 src/perception/models/README.md）
+# 注意：目录被上面的 models/ 规则排除后无法用 ! 单独恢复文件，必须先恢复目录本身
+!src/perception/models/
+!src/perception/models/*.pt
+!src/perception/models/*.task
+
 # Superpowers subagent-driven-development scratch
 .superpowers/
 
